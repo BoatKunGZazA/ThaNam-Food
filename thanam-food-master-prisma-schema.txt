@@ -1,0 +1,1616 @@
+// ============================================================
+// THANAM FOOD — PRISMA DATABASE SCHEMA v1.0
+// ============================================================
+// Purpose:
+//   Canonical Prisma data model for the Thanam Food restaurant
+//   operating system.
+//
+// Architecture:
+//   Modular Monolith + API
+//   PostgreSQL = Source of Truth
+//   Backend = Business Authority
+//
+// Rules:
+//   - UUID primary keys
+//   - Money = Decimal, never Float
+//   - Time = DateTime with PostgreSQL timestamptz
+//   - Historical business records are not physically deleted
+//   - Order snapshots are immutable
+//   - Payment status is independent from Order status
+//   - Kitchen / Delivery / Printer are separate domains
+//   - Audit Log is append-oriented
+//   - Important mutations use Idempotency-Key / transactions
+//
+// NOTE:
+//   PostGIS geometry fields require a PostgreSQL extension and
+//   may require a custom SQL migration. The delivery-zone
+//   boundary is therefore represented as Unsupported("geometry")
+//   in Prisma.
+//
+// This schema is the database foundation. Business state-machine,
+// authorization, validation, and transaction rules remain in the
+// backend services and must NOT be inferred solely from Prisma.
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// ENUMS
+// ============================================================
+
+enum RecordStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum StoreStatus {
+  ACTIVE
+  INACTIVE
+  MAINTENANCE
+}
+
+enum OrderChannel {
+  ONLINE
+  POS
+  TABLE
+  BACK_OFFICE
+}
+
+enum FulfillmentType {
+  DELIVERY
+  PICKUP
+  DINE_IN
+}
+
+enum OrderStatus {
+  PENDING_CONFIRMATION
+  ACCEPTED
+  PREPARING
+  READY
+  DELIVERY
+  ARRIVED
+  DELIVERED
+  SERVED
+  COMPLETED
+  REJECTED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CASH_ON_DELIVERY
+  PROMPTPAY
+  BANK_TRANSFER
+  CASH
+}
+
+enum PaymentStatus {
+  PENDING
+  SUBMITTED
+  VERIFIED
+  REJECTED
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum CartStatus {
+  ACTIVE
+  EXPIRED
+  CONVERTED
+  ABANDONED
+}
+
+enum CustomerStatus {
+  ACTIVE
+  INACTIVE
+  BLOCKED
+}
+
+enum StaffStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum OtpPurpose {
+  LOGIN
+  REGISTER
+  PHONE_CHANGE
+}
+
+enum AddressStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum KitchenJobStatus {
+  PENDING
+  PREPARING
+  READY
+  COMPLETED
+  CANCELLED
+}
+
+enum DeliveryJobStatus {
+  UNASSIGNED
+  ASSIGNED
+  PICKED_UP
+  EN_ROUTE
+  ARRIVED
+  DELIVERED
+  FAILED
+  CANCELLED
+}
+
+enum PromotionType {
+  PERCENTAGE
+  FIXED_AMOUNT
+  FREE_DELIVERY
+}
+
+enum PromotionUsageStatus {
+  RESERVED
+  USED
+  RELEASED
+  CANCELLED
+}
+
+enum PrinterStatus {
+  ACTIVE
+  INACTIVE
+  ERROR
+}
+
+enum PrintJobStatus {
+  PENDING
+  PRINTING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum TableStatus {
+  AVAILABLE
+  OCCUPIED
+  RESERVED
+  INACTIVE
+}
+
+enum TableSessionStatus {
+  OPEN
+  CLOSED
+  CANCELLED
+}
+
+enum StaffCallStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+  CANCELLED
+}
+
+enum NotificationChannel {
+  IN_APP
+  SMS
+  EMAIL
+  PUSH
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  READ
+}
+
+enum BackgroundJobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum OutboxEventStatus {
+  PENDING
+  PROCESSING
+  PUBLISHED
+  FAILED
+}
+
+enum ReviewStatus {
+  PENDING
+  PUBLISHED
+  HIDDEN
+}
+
+enum FileStatus {
+  ACTIVE
+  DELETED
+}
+
+enum PromotionUsageScope {
+  ORDER
+  CUSTOMER
+  GLOBAL
+}
+
+enum CashMovementType {
+  CASH_IN
+  CASH_OUT
+  ADJUSTMENT
+}
+
+enum ShiftStatus {
+  OPEN
+  CLOSED
+
+}
+
+// ============================================================
+// STORE / BUSINESS
+// ============================================================
+
+model Store {
+  id          String      @id @default(uuid()) @db.Uuid
+  code        String      @unique @db.VarChar(50)
+  name        String      @db.VarChar(200)
+  description String?
+  phone       String?     @db.VarChar(30)
+  address     String?
+  latitude    Decimal?    @db.Decimal(10, 7)
+  longitude   Decimal?    @db.Decimal(10, 7)
+  status      StoreStatus @default(ACTIVE)
+  timezone    String      @default("Asia/Bangkok") @db.VarChar(64)
+  currency    String      @default("THB") @db.VarChar(3)
+  createdAt   DateTime    @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime    @updatedAt @db.Timestamptz(6)
+
+  businessHours      StoreBusinessHour[]
+  specialClosures    StoreSpecialClosure[]
+  deliveryZones      DeliveryZone[]
+  customers          Customer[]
+  staffAssignments   StaffStoreAssignment[]
+  menuCategories     MenuCategory[]
+  menuItems          MenuItem[]
+  carts              Cart[]
+  orders             Order[]
+  promotions         Promotion[]
+  kitchenStations    KitchenStation[]
+  deliveryJobs       DeliveryJob[]
+  restaurantTables   RestaurantTable[]
+  printers           Printer[]
+  ingredients        Ingredient[]
+  notifications      Notification[]
+  outboxEvents       OutboxEvent[]
+  backgroundJobs     BackgroundJob[]
+  files              File[]
+  auditLogs          AuditLog[]
+  settings           Setting[]
+  shifts             Shift[]
+  cashMovements      CashMovement[]
+
+  @@map("stores")
+}
+
+model StoreBusinessHour {
+  id                 String   @id @default(uuid()) @db.Uuid
+  storeId            String   @db.Uuid
+  dayOfWeek          Int
+  openingTime        DateTime? @db.Time(0)
+  orderAcceptingTime DateTime? @db.Time(0)
+  orderCutoffTime    DateTime? @db.Time(0)
+  closingTime        DateTime? @db.Time(0)
+  isClosed           Boolean  @default(false)
+  createdAt          DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt          DateTime @updatedAt @db.Timestamptz(6)
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Restrict)
+
+  @@unique([storeId, dayOfWeek])
+  @@index([storeId])
+  @@map("store_business_hours")
+}
+
+model StoreSpecialClosure {
+  id        String   @id @default(uuid()) @db.Uuid
+  storeId   String   @db.Uuid
+  name      String   @db.VarChar(200)
+  startsAt  DateTime @db.Timestamptz(6)
+  endsAt    DateTime @db.Timestamptz(6)
+  reason    String?
+  createdBy String?  @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Restrict)
+
+  @@index([storeId, startsAt, endsAt])
+  @@map("store_special_closures")
+}
+
+model DeliveryZone {
+  id                  String   @id @default(uuid()) @db.Uuid
+  storeId             String   @db.Uuid
+  name                String   @db.VarChar(150)
+  description         String?
+  boundary            Unsupported("geometry")?
+  deliveryFee         Decimal  @db.Decimal(12, 2)
+  minimumOrderAmount  Decimal  @default(0) @db.Decimal(12, 2)
+  maximumDistanceMeters Int?
+  isActive            Boolean  @default(true)
+  createdAt           DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt           DateTime @updatedAt @db.Timestamptz(6)
+
+  store  Store   @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  orders Order[]
+
+  @@index([storeId, isActive])
+  @@map("delivery_zones")
+}
+
+// ============================================================
+// CUSTOMER / AUTH
+// ============================================================
+
+model Customer {
+  id              String         @id @default(uuid()) @db.Uuid
+  storeId         String         @db.Uuid
+  phoneNormalized String         @db.VarChar(30)
+  phoneDisplay    String         @db.VarChar(30)
+  name            String         @db.VarChar(200)
+  nickname        String?        @db.VarChar(100)
+  dateOfBirth     DateTime?      @db.Date
+  status          CustomerStatus @default(ACTIVE)
+  createdAt       DateTime       @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime       @updatedAt @db.Timestamptz(6)
+
+  store        Store            @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  addresses    CustomerAddress[]
+  otpRequests  OtpRequest[]
+  sessions     AuthSession[]
+  carts        Cart[]
+  orders       Order[]
+  reviews      Review[]
+  notifications Notification[]
+  promotions   PromotionUsage[]
+
+  @@unique([storeId, phoneNormalized])
+  @@index([phoneNormalized])
+  @@map("customers")
+}
+
+model CustomerAddress {
+  id                 String        @id @default(uuid()) @db.Uuid
+  customerId         String        @db.Uuid
+  label              String        @db.VarChar(50)
+  recipientName      String        @db.VarChar(200)
+  recipientPhone     String        @db.VarChar(30)
+  houseNumber        String?       @db.VarChar(100)
+  moo                String?       @db.VarChar(50)
+  soi                String?       @db.VarChar(150)
+  road               String?       @db.VarChar(150)
+  subdistrict        String?       @db.VarChar(150)
+  district           String?       @db.VarChar(150)
+  province           String?       @db.VarChar(150)
+  postalCode         String?       @db.VarChar(10)
+  additionalDetail   String?
+  deliveryNote       String?
+  latitude           Decimal?      @db.Decimal(10, 7)
+  longitude          Decimal?      @db.Decimal(10, 7)
+  isDefault          Boolean       @default(false)
+  status             AddressStatus  @default(ACTIVE)
+  createdAt          DateTime      @default(now()) @db.Timestamptz(6)
+  updatedAt          DateTime      @updatedAt @db.Timestamptz(6)
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  @@index([customerId, isDefault])
+  @@map("customer_addresses")
+}
+
+model OtpRequest {
+  id             String     @id @default(uuid()) @db.Uuid
+  customerId     String?    @db.Uuid
+  phoneNormalized String    @db.VarChar(30)
+  purpose        OtpPurpose @default(LOGIN)
+  codeHash       String     @db.VarChar(255)
+  expiresAt      DateTime   @db.Timestamptz(6)
+  attemptCount   Int        @default(0)
+  resendCount    Int        @default(0)
+  verifiedAt     DateTime?  @db.Timestamptz(6)
+  createdAt      DateTime   @default(now()) @db.Timestamptz(6)
+
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@index([phoneNormalized, createdAt])
+  @@index([customerId, createdAt])
+  @@map("otp_requests")
+}
+
+model AuthSession {
+  id         String    @id @default(uuid()) @db.Uuid
+  customerId String    @db.Uuid
+  tokenHash  String    @unique @db.VarChar(255)
+  deviceInfo String?
+  ipAddress  String?   @db.VarChar(100)
+  userAgent  String?
+  expiresAt  DateTime  @db.Timestamptz(6)
+  revokedAt  DateTime? @db.Timestamptz(6)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(6)
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  @@index([customerId, expiresAt])
+  @@map("auth_sessions")
+}
+
+// ============================================================
+// STAFF / RBAC
+// ============================================================
+
+model Staff {
+  id            String      @id @default(uuid()) @db.Uuid
+  employeeCode  String      @unique @db.VarChar(50)
+  name          String      @db.VarChar(200)
+  phone         String?     @db.VarChar(30)
+  status        StaffStatus @default(ACTIVE)
+  createdAt     DateTime    @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime    @updatedAt @db.Timestamptz(6)
+
+  account             StaffAccount?
+  roles               StaffRole[]
+  permissionOverrides StaffPermissionOverride[]
+  storeAssignments    StaffStoreAssignment[]
+  auditLogs           AuditLog[]
+  ordersAccepted      Order[]        @relation("OrderAcceptedBy")
+  ordersRejected      Order[]        @relation("OrderRejectedBy")
+  deliveryJobs        DeliveryJob[]
+  kitchenJobs         KitchenJob[]
+  staffCallsAck       StaffCall[]    @relation("StaffCallAcknowledgedBy")
+  staffCallsResolved  StaffCall[]    @relation("StaffCallResolvedBy")
+  printJobsCreated    PrintJob[]     @relation("PrintJobCreatedBy")
+  paymentVerifications Payment[]      @relation("PaymentVerifiedBy")
+  refundsCreated      Refund[]       @relation("RefundCreatedBy")
+  shiftsOpened        Shift[]        @relation("ShiftOpenedBy")
+  shiftsClosed        Shift[]        @relation("ShiftClosedBy")
+  cashMovements       CashMovement[] @relation("CashMovementCreatedBy")
+
+  @@map("staff")
+}
+
+model StaffAccount {
+  id           String   @id @default(uuid()) @db.Uuid
+  staffId      String   @unique @db.Uuid
+  username     String   @unique @db.VarChar(100)
+  passwordHash String   @db.VarChar(255)
+  lastLoginAt  DateTime? @db.Timestamptz(6)
+  createdAt    DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(6)
+
+  staff Staff @relation(fields: [staffId], references: [id], onDelete: Restrict)
+
+  @@map("staff_accounts")
+}
+
+model Role {
+  id          String       @id @default(uuid()) @db.Uuid
+  code        String       @unique @db.VarChar(50)
+  name        String       @db.VarChar(100)
+  description String?
+  createdAt   DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime     @updatedAt @db.Timestamptz(6)
+
+  permissions  RolePermission[]
+  staffRoles   StaffRole[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String       @id @default(uuid()) @db.Uuid
+  code        String       @unique @db.VarChar(100)
+  name        String       @db.VarChar(150)
+  description String?
+  createdAt   DateTime     @default(now()) @db.Timestamptz(6)
+
+  roles RolePermission[]
+  overrides StaffPermissionOverride[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String @db.Uuid
+  permissionId String @db.Uuid
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model StaffRole {
+  staffId String @db.Uuid
+  roleId  String @db.Uuid
+
+  staff Staff @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  role  Role  @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([staffId, roleId])
+  @@map("staff_roles")
+}
+
+model StaffPermissionOverride {
+  id           String  @id @default(uuid()) @db.Uuid
+  staffId      String  @db.Uuid
+  permissionId String  @db.Uuid
+  allowed      Boolean
+  reason       String?
+  createdAt    DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(6)
+
+  staff      Staff      @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Restrict)
+
+  @@unique([staffId, permissionId])
+  @@index([staffId])
+  @@map("staff_permission_overrides")
+}
+
+model StaffStoreAssignment {
+  staffId  String   @db.Uuid
+  storeId  String   @db.Uuid
+  isPrimary Boolean  @default(false)
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  staff Staff  @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  store Store  @relation(fields: [storeId], references: [id], onDelete: Restrict)
+
+  @@id([staffId, storeId])
+  @@index([storeId])
+  @@map("staff_store_assignments")
+}
+
+// ============================================================
+// MENU
+// ============================================================
+
+model MenuCategory {
+  id          String       @id @default(uuid()) @db.Uuid
+  storeId     String       @db.Uuid
+  name        String       @db.VarChar(150)
+  description String?
+  sortOrder   Int          @default(0)
+  status      RecordStatus @default(ACTIVE)
+  createdAt   DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime     @updatedAt @db.Timestamptz(6)
+
+  store Store      @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  items MenuItem[]
+
+  @@index([storeId, status, sortOrder])
+  @@map("menu_categories")
+}
+
+model MenuItem {
+  id             String       @id @default(uuid()) @db.Uuid
+  storeId        String       @db.Uuid
+  categoryId     String       @db.Uuid
+  name           String       @db.VarChar(200)
+  description    String?
+  imageUrl       String?
+  basePrice      Decimal      @db.Decimal(12, 2)
+  status         RecordStatus @default(ACTIVE)
+  isSoldOut      Boolean      @default(false)
+  sortOrder      Int          @default(0)
+  createdAt      DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime     @updatedAt @db.Timestamptz(6)
+
+  store        Store                  @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  category     MenuCategory            @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  optionGroups MenuItemOptionGroup[]
+  availability MenuItemAvailability[]
+  priceHistory PriceHistory[]
+  cartItems    CartItem[]
+  orderItems   OrderItem[]
+  recipe       Recipe?
+
+  @@index([storeId, categoryId, status, sortOrder])
+  @@index([storeId, isSoldOut])
+  @@map("menu_items")
+}
+
+model OptionGroup {
+  id          String       @id @default(uuid()) @db.Uuid
+  name        String       @db.VarChar(150)
+  description String?
+  isRequired  Boolean      @default(false)
+  minSelect   Int          @default(0)
+  maxSelect   Int          @default(1)
+  sortOrder   Int          @default(0)
+  status      RecordStatus @default(ACTIVE)
+  createdAt   DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime     @updatedAt @db.Timestamptz(6)
+
+  options     Option[]
+  menuItems   MenuItemOptionGroup[]
+
+  @@map("option_groups")
+}
+
+model Option {
+  id            String       @id @default(uuid()) @db.Uuid
+  optionGroupId String       @db.Uuid
+  name          String       @db.VarChar(150)
+  priceDelta    Decimal      @default(0) @db.Decimal(12, 2)
+  sortOrder     Int          @default(0)
+  status        RecordStatus @default(ACTIVE)
+  createdAt     DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime     @updatedAt @db.Timestamptz(6)
+
+  optionGroup OptionGroup @relation(fields: [optionGroupId], references: [id], onDelete: Restrict)
+
+  @@index([optionGroupId, status, sortOrder])
+  @@map("options")
+}
+
+model MenuItemOptionGroup {
+  menuItemId   String @db.Uuid
+  optionGroupId String @db.Uuid
+  sortOrder    Int    @default(0)
+
+  menuItem   MenuItem   @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  optionGroup OptionGroup @relation(fields: [optionGroupId], references: [id], onDelete: Restrict)
+
+  @@id([menuItemId, optionGroupId])
+  @@map("menu_item_option_groups")
+}
+
+model MenuItemAvailability {
+  id         String   @id @default(uuid()) @db.Uuid
+  menuItemId String   @db.Uuid
+  startsAt   DateTime @db.Timestamptz(6)
+  endsAt     DateTime? @db.Timestamptz(6)
+  isAvailable Boolean @default(true)
+  reason     String?
+  createdAt  DateTime @default(now()) @db.Timestamptz(6)
+
+  menuItem MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Restrict)
+
+  @@index([menuItemId, startsAt, endsAt])
+  @@map("menu_item_availability")
+}
+
+model PriceHistory {
+  id         String   @id @default(uuid()) @db.Uuid
+  menuItemId String   @db.Uuid
+  oldPrice   Decimal  @db.Decimal(12, 2)
+  newPrice   Decimal  @db.Decimal(12, 2)
+  reason     String?
+  changedBy  String?  @db.Uuid
+  createdAt  DateTime @default(now()) @db.Timestamptz(6)
+
+  menuItem MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Restrict)
+
+  @@index([menuItemId, createdAt])
+  @@map("price_histories")
+}
+
+// ============================================================
+// CART / ORDER
+// ============================================================
+
+model Cart {
+  id        String     @id @default(uuid()) @db.Uuid
+  storeId   String     @db.Uuid
+  customerId String   @db.Uuid
+  status    CartStatus @default(ACTIVE)
+  expiresAt DateTime   @db.Timestamptz(6)
+  createdAt DateTime   @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(6)
+
+  store    Store      @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  customer Customer   @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  items    CartItem[]
+
+  @@index([customerId, status])
+  @@index([storeId, status, expiresAt])
+  @@map("carts")
+}
+
+model CartItem {
+  id             String   @id @default(uuid()) @db.Uuid
+  cartId         String   @db.Uuid
+  menuItemId     String   @db.Uuid
+  itemNameSnapshot String  @db.VarChar(200)
+  unitPrice      Decimal  @db.Decimal(12, 2)
+  quantity       Int
+  subtotal       Decimal  @db.Decimal(12, 2)
+  optionSnapshot Json?
+  notes          String?
+  createdAt      DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @db.Timestamptz(6)
+
+  cart     Cart     @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  menuItem MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Restrict)
+
+  @@index([cartId])
+  @@map("cart_items")
+}
+
+model Order {
+  id                 String          @id @default(uuid()) @db.Uuid
+  orderNumber        String          @unique @db.VarChar(50)
+  storeId            String          @db.Uuid
+  customerId         String?         @db.Uuid
+  orderChannel       OrderChannel
+  fulfillmentType    FulfillmentType
+  status             OrderStatus     @default(PENDING_CONFIRMATION)
+  subtotal           Decimal         @db.Decimal(12, 2)
+  itemDiscount       Decimal         @default(0) @db.Decimal(12, 2)
+  promotionDiscount  Decimal         @default(0) @db.Decimal(12, 2)
+  deliveryFee        Decimal         @default(0) @db.Decimal(12, 2)
+  grandTotal         Decimal         @db.Decimal(12, 2)
+  paymentMethod      PaymentMethod
+  paymentStatus      PaymentStatus   @default(PENDING)
+  customerSnapshot   Json
+  addressSnapshot    Json?
+  deliveryZoneId     String?         @db.Uuid
+  tableId            String?         @db.Uuid
+  tableSessionId     String?         @db.Uuid
+  note               String?
+  acceptedById       String?         @db.Uuid
+  rejectedById       String?         @db.Uuid
+  rejectionReason    String?
+  createdAt          DateTime        @default(now()) @db.Timestamptz(6)
+  updatedAt          DateTime        @updatedAt @db.Timestamptz(6)
+  completedAt        DateTime?       @db.Timestamptz(6)
+
+  store        Store           @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  customer     Customer?       @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  deliveryZone DeliveryZone?   @relation(fields: [deliveryZoneId], references: [id], onDelete: SetNull)
+  table        RestaurantTable? @relation(fields: [tableId], references: [id], onDelete: SetNull)
+  tableSession  TableSession?  @relation(fields: [tableSessionId], references: [id], onDelete: SetNull)
+  acceptedBy   Staff?          @relation("OrderAcceptedBy", fields: [acceptedById], references: [id], onDelete: SetNull)
+  rejectedBy   Staff?          @relation("OrderRejectedBy", fields: [rejectedById], references: [id], onDelete: SetNull)
+
+  items       OrderItem[]
+  timeline    OrderTimeline[]
+  issues      OrderIssue[]
+  payments    Payment[]
+  refunds     Refund[]
+  kitchenJobs KitchenJob[]
+  deliveryJob DeliveryJob?
+  review      Review?
+  printJobs   PrintJob[]
+  promotionUsages PromotionUsage[]
+  idempotencyKeys IdempotencyKey[]
+
+  @@index([customerId, createdAt])
+  @@index([status, createdAt])
+  @@index([paymentStatus, createdAt])
+  @@index([orderChannel, createdAt])
+  @@index([storeId, createdAt])
+  @@map("orders")
+}
+
+model OrderItem {
+  id              String   @id @default(uuid()) @db.Uuid
+  orderId         String   @db.Uuid
+  menuItemId      String?  @db.Uuid
+  itemNameSnapshot String  @db.VarChar(200)
+  unitPrice       Decimal  @db.Decimal(12, 2)
+  quantity        Int
+  subtotal        Decimal  @db.Decimal(12, 2)
+  discount        Decimal  @default(0) @db.Decimal(12, 2)
+  total           Decimal  @db.Decimal(12, 2)
+  notes           String?
+  optionSnapshot  Json?
+  createdAt       DateTime @default(now()) @db.Timestamptz(6)
+
+  order    Order    @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  menuItem MenuItem? @relation(fields: [menuItemId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+  @@map("order_items")
+}
+
+model OrderTimeline {
+  id          String   @id @default(uuid()) @db.Uuid
+  orderId     String   @db.Uuid
+  fromStatus  OrderStatus?
+  toStatus    OrderStatus
+  actorStaffId String? @db.Uuid
+  actorType   String   @db.VarChar(30)
+  reason      String?
+  note        String?
+  ipAddress   String?  @db.VarChar(100)
+  userAgent   String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  @@index([orderId, createdAt])
+  @@map("order_timelines")
+}
+
+model OrderIssue {
+  id          String   @id @default(uuid()) @db.Uuid
+  orderId     String   @db.Uuid
+  code        String   @db.VarChar(80)
+  description String?
+  status      String   @default("OPEN") @db.VarChar(30)
+  reportedBy  String?  @db.Uuid
+  resolvedBy  String?  @db.Uuid
+  resolvedAt  DateTime? @db.Timestamptz(6)
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(6)
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  @@index([orderId, status])
+  @@map("order_issues")
+}
+
+model IdempotencyKey {
+  id             String   @id @default(uuid()) @db.Uuid
+  key            String   @db.VarChar(255)
+  scope          String   @db.VarChar(100)
+  requestHash    String   @db.VarChar(255)
+  responseStatus Int?
+  responseBody   Json?
+  orderId        String?  @db.Uuid
+  createdAt      DateTime @default(now()) @db.Timestamptz(6)
+  expiresAt      DateTime? @db.Timestamptz(6)
+
+  order Order? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@unique([scope, key])
+  @@index([expiresAt])
+  @@map("idempotency_keys")
+}
+
+// ============================================================
+// PAYMENT / ACCOUNTING
+// ============================================================
+
+model Payment {
+  id                String        @id @default(uuid()) @db.Uuid
+  orderId           String        @db.Uuid
+  amount            Decimal       @db.Decimal(12, 2)
+  method            PaymentMethod
+  status            PaymentStatus @default(PENDING)
+  referenceNumber   String?       @db.VarChar(100)
+  verifiedById      String?       @db.Uuid
+  verifiedAt        DateTime?     @db.Timestamptz(6)
+  failureReason     String?
+  createdAt         DateTime      @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime      @updatedAt @db.Timestamptz(6)
+
+  order      Order @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  verifiedBy Staff? @relation("PaymentVerifiedBy", fields: [verifiedById], references: [id], onDelete: SetNull)
+  slips      PaymentSlip[]
+
+  @@index([orderId, status])
+  @@map("payments")
+}
+
+model PaymentSlip {
+  id          String   @id @default(uuid()) @db.Uuid
+  paymentId   String   @db.Uuid
+  fileId      String   @db.Uuid
+  submittedAt DateTime @default(now()) @db.Timestamptz(6)
+  verifiedAt  DateTime? @db.Timestamptz(6)
+  rejectedAt  DateTime? @db.Timestamptz(6)
+  reason      String?
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  file    File    @relation(fields: [fileId], references: [id], onDelete: Restrict)
+
+  @@index([paymentId, submittedAt])
+  @@map("payment_slips")
+}
+
+model Refund {
+  id          String   @id @default(uuid()) @db.Uuid
+  orderId     String   @db.Uuid
+  paymentId   String?  @db.Uuid
+  amount      Decimal  @db.Decimal(12, 2)
+  reason      String
+  createdById String?  @db.Uuid
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+
+  order     Order @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  payment   Payment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  createdBy Staff? @relation("RefundCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([orderId, createdAt])
+  @@map("refunds")
+}
+
+model Shift {
+  id          String      @id @default(uuid()) @db.Uuid
+  storeId     String      @db.Uuid
+  openedById  String      @db.Uuid
+  closedById  String?     @db.Uuid
+  status      ShiftStatus @default(OPEN)
+  openingCash Decimal     @db.Decimal(12, 2)
+  closingCash Decimal?    @db.Decimal(12, 2)
+  openedAt    DateTime    @default(now()) @db.Timestamptz(6)
+  closedAt    DateTime?   @db.Timestamptz(6)
+  note        String?
+
+  store    Store @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  openedBy Staff @relation("ShiftOpenedBy", fields: [openedById], references: [id], onDelete: Restrict)
+  closedBy Staff? @relation("ShiftClosedBy", fields: [closedById], references: [id], onDelete: SetNull)
+  cashMovements CashMovement[]
+
+  @@index([storeId, status, openedAt])
+  @@map("shifts")
+}
+
+model CashMovement {
+  id          String            @id @default(uuid()) @db.Uuid
+  storeId     String            @db.Uuid
+  shiftId     String?           @db.Uuid
+  type        CashMovementType
+  amount      Decimal           @db.Decimal(12, 2)
+  reason      String?
+  createdById String?           @db.Uuid
+  createdAt   DateTime          @default(now()) @db.Timestamptz(6)
+
+  store     Store @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  shift     Shift? @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+  createdBy Staff? @relation("CashMovementCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([storeId, createdAt])
+  @@index([shiftId, createdAt])
+  @@map("cash_movements")
+}
+
+// ============================================================
+// KITCHEN
+// ============================================================
+
+model KitchenStation {
+  id        String   @id @default(uuid()) @db.Uuid
+  storeId   String   @db.Uuid
+  name      String   @db.VarChar(150)
+  sortOrder Int      @default(0)
+  status    RecordStatus @default(ACTIVE)
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  jobs  KitchenJob[]
+
+  @@index([storeId, status, sortOrder])
+  @@map("kitchen_stations")
+}
+
+model KitchenJob {
+  id            String          @id @default(uuid()) @db.Uuid
+  orderId       String          @db.Uuid
+  stationId     String          @db.Uuid
+  status        KitchenJobStatus @default(PENDING)
+  startedById   String?         @db.Uuid
+  startedAt     DateTime?       @db.Timestamptz(6)
+  readyAt       DateTime?       @db.Timestamptz(6)
+  completedAt   DateTime?       @db.Timestamptz(6)
+  note          String?
+  createdAt     DateTime        @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime        @updatedAt @db.Timestamptz(6)
+
+  order     Order          @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  station   KitchenStation @relation(fields: [stationId], references: [id], onDelete: Restrict)
+  startedBy Staff?         @relation(fields: [startedById], references: [id], onDelete: SetNull)
+  items     KitchenJobItem[]
+
+  @@index([orderId, status])
+  @@index([stationId, status])
+  @@map("kitchen_jobs")
+}
+
+model KitchenJobItem {
+  id           String @id @default(uuid()) @db.Uuid
+  kitchenJobId String @db.Uuid
+  orderItemId  String @db.Uuid
+  quantity     Int
+  createdAt    DateTime @default(now()) @db.Timestamptz(6)
+
+  kitchenJob KitchenJob @relation(fields: [kitchenJobId], references: [id], onDelete: Cascade)
+
+  @@index([kitchenJobId])
+  @@map("kitchen_job_items")
+}
+
+// ============================================================
+// DELIVERY
+// ============================================================
+
+model DeliveryJob {
+  id                    String           @id @default(uuid()) @db.Uuid
+  storeId               String           @db.Uuid
+  orderId               String           @unique @db.Uuid
+  driverId              String?          @db.Uuid
+  deliveryZoneId        String?          @db.Uuid
+  status                DeliveryJobStatus @default(UNASSIGNED)
+  pickupTime            DateTime?        @db.Timestamptz(6)
+  pickedUpAt            DateTime?        @db.Timestamptz(6)
+  startedAt             DateTime?        @db.Timestamptz(6)
+  arrivedAt             DateTime?        @db.Timestamptz(6)
+  deliveredAt           DateTime?        @db.Timestamptz(6)
+  destinationLatitude  Decimal?         @db.Decimal(10, 7)
+  destinationLongitude Decimal?         @db.Decimal(10, 7)
+  codAmount             Decimal          @default(0) @db.Decimal(12, 2)
+  collectedAmount       Decimal?         @db.Decimal(12, 2)
+  issue                 String?
+  note                  String?
+  createdAt             DateTime         @default(now()) @db.Timestamptz(6)
+  updatedAt             DateTime         @updatedAt @db.Timestamptz(6)
+
+  store        Store         @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  order        Order         @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  driver       Staff?        @relation(fields: [driverId], references: [id], onDelete: SetNull)
+
+  @@index([driverId, status])
+  @@index([status, createdAt])
+  @@map("delivery_jobs")
+}
+
+// ============================================================
+// TABLE / DINE-IN
+// ============================================================
+
+model RestaurantTable {
+  id          String      @id @default(uuid()) @db.Uuid
+  storeId     String      @db.Uuid
+  name        String      @db.VarChar(100)
+  capacity    Int?
+  status      TableStatus @default(AVAILABLE)
+  createdAt   DateTime    @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime    @updatedAt @db.Timestamptz(6)
+
+  store      Store          @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  qrCodes    TableQrCode[]
+  sessions   TableSession[]
+  orders     Order[]
+  staffCalls StaffCall[]
+
+  @@index([storeId, status])
+  @@map("restaurant_tables")
+}
+
+model TableQrCode {
+  id        String   @id @default(uuid()) @db.Uuid
+  tableId   String   @db.Uuid
+  token     String   @unique @db.VarChar(255)
+  status    RecordStatus @default(ACTIVE)
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  table RestaurantTable @relation(fields: [tableId], references: [id], onDelete: Restrict)
+
+  @@index([tableId, status])
+  @@map("table_qr_codes")
+}
+
+model TableSession {
+  id        String             @id @default(uuid()) @db.Uuid
+  tableId   String             @db.Uuid
+  status    TableSessionStatus @default(OPEN)
+  openedAt  DateTime           @default(now()) @db.Timestamptz(6)
+  closedAt  DateTime?          @db.Timestamptz(6)
+  createdAt DateTime           @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime           @updatedAt @db.Timestamptz(6)
+
+  table    RestaurantTable       @relation(fields: [tableId], references: [id], onDelete: Restrict)
+  customers TableSessionCustomer[]
+  orders    Order[]
+
+  @@index([tableId, status])
+  @@map("table_sessions")
+}
+
+model TableSessionCustomer {
+  tableSessionId String   @db.Uuid
+  customerId     String   @db.Uuid
+  joinedAt       DateTime @default(now()) @db.Timestamptz(6)
+
+  tableSession TableSession @relation(fields: [tableSessionId], references: [id], onDelete: Cascade)
+  customer     Customer     @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  @@id([tableSessionId, customerId])
+  @@map("table_session_customers")
+}
+
+model StaffCall {
+  id             String          @id @default(uuid()) @db.Uuid
+  tableId        String          @db.Uuid
+  type           String          @db.VarChar(50)
+  status         StaffCallStatus @default(OPEN)
+  message        String?
+  acknowledgedById String?       @db.Uuid
+  resolvedById   String?          @db.Uuid
+  acknowledgedAt DateTime?       @db.Timestamptz(6)
+  resolvedAt     DateTime?       @db.Timestamptz(6)
+  createdAt      DateTime         @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime         @updatedAt @db.Timestamptz(6)
+
+  table         RestaurantTable @relation(fields: [tableId], references: [id], onDelete: Restrict)
+  acknowledgedBy Staff? @relation("StaffCallAcknowledgedBy", fields: [acknowledgedById], references: [id], onDelete: SetNull)
+  resolvedBy    Staff? @relation("StaffCallResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
+
+  @@index([tableId, status])
+  @@index([status, createdAt])
+  @@map("staff_calls")
+}
+
+// ============================================================
+// PRINTER
+// ============================================================
+
+model Printer {
+  id          String        @id @default(uuid()) @db.Uuid
+  storeId     String        @db.Uuid
+  name        String        @db.VarChar(150)
+  printerType String        @db.VarChar(50)
+  connection  Json
+  status      PrinterStatus  @default(ACTIVE)
+  lastSeenAt  DateTime?      @db.Timestamptz(6)
+  createdAt   DateTime       @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime       @updatedAt @db.Timestamptz(6)
+
+  store   Store         @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  routes  PrinterRoute[]
+  jobs    PrintJob[]
+
+  @@index([storeId, status])
+  @@map("printers")
+}
+
+model PrinterRoute {
+  id        String   @id @default(uuid()) @db.Uuid
+  printerId String   @db.Uuid
+  eventType String   @db.VarChar(100)
+  priority  Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  printer Printer @relation(fields: [printerId], references: [id], onDelete: Cascade)
+
+  @@index([printerId, eventType, isActive])
+  @@map("printer_routes")
+}
+
+model PrintJob {
+  id           String        @id @default(uuid()) @db.Uuid
+  printerId    String        @db.Uuid
+  orderId      String?       @db.Uuid
+  createdById  String?       @db.Uuid
+  jobType      String        @db.VarChar(80)
+  payload      Json
+  status       PrintJobStatus @default(PENDING)
+  attemptCount Int           @default(0)
+  errorMessage String?
+  printedAt    DateTime?     @db.Timestamptz(6)
+  createdAt    DateTime      @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime      @updatedAt @db.Timestamptz(6)
+
+  printer   Printer @relation(fields: [printerId], references: [id], onDelete: Restrict)
+  order     Order?  @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  createdBy Staff?  @relation("PrintJobCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([printerId, status, createdAt])
+  @@index([orderId, createdAt])
+  @@map("print_jobs")
+}
+
+// ============================================================
+// INVENTORY / RECIPE
+// ============================================================
+
+model Ingredient {
+  id          String       @id @default(uuid()) @db.Uuid
+  storeId     String       @db.Uuid
+  name        String       @db.VarChar(200)
+  unit        String       @db.VarChar(50)
+  status      RecordStatus @default(ACTIVE)
+  createdAt   DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime     @updatedAt @db.Timestamptz(6)
+
+  store          Store             @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  stockBalance   StockBalance?
+  stockMovements StockMovement[]
+  recipeItems    RecipeIngredient[]
+
+  @@index([storeId, status])
+  @@map("ingredients")
+}
+
+model StockBalance {
+  id           String   @id @default(uuid()) @db.Uuid
+  ingredientId String   @unique @db.Uuid
+  quantity     Decimal  @db.Decimal(14, 4)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(6)
+
+  ingredient Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
+
+  @@map("stock_balances")
+}
+
+model StockMovement {
+  id           String   @id @default(uuid()) @db.Uuid
+  ingredientId String   @db.Uuid
+  movementType String   @db.VarChar(50)
+  quantity     Decimal  @db.Decimal(14, 4)
+  referenceType String?
+  referenceId  String?  @db.Uuid
+  note         String?
+  createdAt    DateTime @default(now()) @db.Timestamptz(6)
+
+  ingredient Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
+
+  @@index([ingredientId, createdAt])
+  @@map("stock_movements")
+}
+
+model Recipe {
+  id         String   @id @default(uuid()) @db.Uuid
+  menuItemId String   @unique @db.Uuid
+  createdAt  DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt  DateTime @updatedAt @db.Timestamptz(6)
+
+  menuItem    MenuItem           @relation(fields: [menuItemId], references: [id], onDelete: Restrict)
+  ingredients RecipeIngredient[]
+
+  @@map("recipes")
+}
+
+model RecipeIngredient {
+  recipeId     String   @db.Uuid
+  ingredientId String   @db.Uuid
+  quantity     Decimal  @db.Decimal(14, 4)
+  unit         String   @db.VarChar(50)
+
+  recipe     Recipe     @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  ingredient Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
+
+  @@id([recipeId, ingredientId])
+  @@map("recipe_ingredients")
+}
+
+// ============================================================
+// PROMOTION
+// ============================================================
+
+model Promotion {
+  id                String        @id @default(uuid()) @db.Uuid
+  storeId           String        @db.Uuid
+  code              String?       @db.VarChar(100)
+  name              String        @db.VarChar(200)
+  description       String?
+  type              PromotionType
+  value             Decimal       @db.Decimal(12, 2)
+  minimumSpend      Decimal       @default(0) @db.Decimal(12, 2)
+  startsAt          DateTime      @db.Timestamptz(6)
+  endsAt            DateTime      @db.Timestamptz(6)
+  usageLimit        Int?
+  perCustomerLimit  Int?
+  isStackable       Boolean       @default(false)
+  priority          Int           @default(0)
+  status             RecordStatus @default(ACTIVE)
+  createdAt         DateTime      @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime      @updatedAt @db.Timestamptz(6)
+
+  store  Store            @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  usages PromotionUsage[]
+
+  @@unique([storeId, code])
+  @@index([storeId, status, startsAt, endsAt])
+  @@map("promotions")
+}
+
+model PromotionUsage {
+  id          String                 @id @default(uuid()) @db.Uuid
+  promotionId String                 @db.Uuid
+  orderId     String                 @db.Uuid
+  customerId  String?                @db.Uuid
+  scope       PromotionUsageScope
+  status      PromotionUsageStatus   @default(RESERVED)
+  discountAmount Decimal              @db.Decimal(12, 2)
+  createdAt   DateTime               @default(now()) @db.Timestamptz(6)
+  usedAt      DateTime?              @db.Timestamptz(6)
+
+  promotion Promotion @relation(fields: [promotionId], references: [id], onDelete: Restrict)
+  order     Order     @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  customer  Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@index([promotionId, status])
+  @@index([customerId, promotionId, status])
+  @@index([orderId])
+  @@map("promotion_usages")
+}
+
+// ============================================================
+// REVIEWS
+// ============================================================
+
+model Review {
+  id         String       @id @default(uuid()) @db.Uuid
+  orderId    String       @unique @db.Uuid
+  customerId String       @db.Uuid
+  rating     Int
+  comment    String?
+  status     ReviewStatus @default(PENDING)
+  createdAt  DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt  DateTime     @updatedAt @db.Timestamptz(6)
+
+  order    Order    @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  @@index([customerId, createdAt])
+  @@map("reviews")
+}
+
+// ============================================================
+// NOTIFICATIONS
+// ============================================================
+
+model Notification {
+  id          String               @id @default(uuid()) @db.Uuid
+  customerId  String?              @db.Uuid
+  storeId     String               @db.Uuid
+  channel     NotificationChannel
+  status      NotificationStatus  @default(PENDING)
+  type        String               @db.VarChar(100)
+  title       String               @db.VarChar(200)
+  message     String
+  data        Json?
+  sentAt      DateTime?            @db.Timestamptz(6)
+  readAt      DateTime?            @db.Timestamptz(6)
+  createdAt   DateTime             @default(now()) @db.Timestamptz(6)
+
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  store    Store     @relation(fields: [storeId], references: [id], onDelete: Restrict)
+
+  @@index([customerId, status, createdAt])
+  @@index([storeId, status, createdAt])
+  @@map("notifications")
+}
+
+model NotificationPreference {
+  id         String                @id @default(uuid()) @db.Uuid
+  customerId String                @db.Uuid
+  channel    NotificationChannel
+  type       String                @db.VarChar(100)
+  enabled    Boolean               @default(true)
+  createdAt  DateTime              @default(now()) @db.Timestamptz(6)
+  updatedAt  DateTime              @updatedAt @db.Timestamptz(6)
+
+  @@unique([customerId, channel, type])
+  @@map("notification_preferences")
+}
+
+// ============================================================
+// FILES
+// ============================================================
+
+model File {
+  id           String     @id @default(uuid()) @db.Uuid
+  storeId      String?    @db.Uuid
+  originalName String     @db.VarChar(255)
+  storageKey   String     @unique @db.VarChar(500)
+  mimeType     String     @db.VarChar(150)
+  extension    String?    @db.VarChar(20)
+  sizeBytes    BigInt
+  checksum     String?    @db.VarChar(255)
+  status       FileStatus @default(ACTIVE)
+  createdAt    DateTime   @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime   @updatedAt @db.Timestamptz(6)
+
+  store       Store?        @relation(fields: [storeId], references: [id], onDelete: SetNull)
+  relations   FileRelation[]
+  paymentSlips PaymentSlip[]
+
+  @@index([storeId, status])
+  @@map("files")
+}
+
+model FileRelation {
+  id         String   @id @default(uuid()) @db.Uuid
+  fileId     String   @db.Uuid
+  entityType String   @db.VarChar(100)
+  entityId   String   @db.Uuid
+  relation   String   @db.VarChar(100)
+  createdAt  DateTime @default(now()) @db.Timestamptz(6)
+
+  file File @relation(fields: [fileId], references: [id], onDelete: Restrict)
+
+  @@index([entityType, entityId])
+  @@index([fileId])
+  @@map("file_relations")
+}
+
+// ============================================================
+// OUTBOX / BACKGROUND JOBS
+// ============================================================
+
+model OutboxEvent {
+  id            String            @id @default(uuid()) @db.Uuid
+  eventId       String            @unique @db.Uuid
+  eventType     String            @db.VarChar(150)
+  aggregateType String            @db.VarChar(100)
+  aggregateId   String            @db.Uuid
+  storeId       String            @db.Uuid
+  occurredAt    DateTime          @default(now()) @db.Timestamptz(6)
+  actorType     String?           @db.VarChar(50)
+  actorId       String?           @db.Uuid
+  data          Json
+  status        OutboxEventStatus @default(PENDING)
+  attemptCount  Int               @default(0)
+  publishedAt   DateTime?         @db.Timestamptz(6)
+  lastError     String?
+  createdAt     DateTime          @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime          @updatedAt @db.Timestamptz(6)
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Restrict)
+
+  @@index([status, createdAt])
+  @@index([aggregateType, aggregateId])
+  @@index([storeId, createdAt])
+  @@map("outbox_events")
+}
+
+model BackgroundJob {
+  id            String              @id @default(uuid()) @db.Uuid
+  storeId       String?             @db.Uuid
+  jobType       String              @db.VarChar(150)
+  payload       Json
+  status        BackgroundJobStatus  @default(PENDING)
+  scheduledAt   DateTime            @default(now()) @db.Timestamptz(6)
+  startedAt     DateTime?           @db.Timestamptz(6)
+  completedAt   DateTime?            @db.Timestamptz(6)
+  attemptCount  Int                 @default(0)
+  maxAttempts   Int                 @default(5)
+  lastError     String?
+  createdAt     DateTime            @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime            @updatedAt @db.Timestamptz(6)
+
+  store Store? @relation(fields: [storeId], references: [id], onDelete: SetNull)
+
+  @@index([status, scheduledAt])
+  @@index([storeId, status, scheduledAt])
+  @@map("background_jobs")
+}
+
+// ============================================================
+// AUDIT / SETTINGS
+// ============================================================
+
+model AuditLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  storeId     String?  @db.Uuid
+  actorStaffId String? @db.Uuid
+  actorType   String   @db.VarChar(50)
+  action      String   @db.VarChar(150)
+  module      String   @db.VarChar(100)
+  entityType  String?  @db.VarChar(100)
+  entityId    String?  @db.Uuid
+  beforeData  Json?
+  afterData   Json?
+  reason      String?
+  ipAddress   String?  @db.VarChar(100)
+  userAgent   String?
+  requestId   String?  @db.VarChar(100)
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+
+  store Store? @relation(fields: [storeId], references: [id], onDelete: SetNull)
+  actor Staff? @relation(fields: [actorStaffId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId, createdAt])
+  @@index([actorStaffId, createdAt])
+  @@index([storeId, createdAt])
+  @@map("audit_logs")
+}
+
+model Setting {
+  id        String   @id @default(uuid()) @db.Uuid
+  storeId   String   @db.Uuid
+  key       String   @db.VarChar(150)
+  value     Json
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Restrict)
+
+  @@unique([storeId, key])
+  @@map("settings")
+}
+
+// ============================================================
+// IMPORTANT IMPLEMENTATION NOTES
+// ============================================================
+//
+// 1. PostGIS:
+//    CREATE EXTENSION IF NOT EXISTS postgis;
+//    DeliveryZone.boundary uses Unsupported("geometry").
+//    Spatial GIST index should be created in SQL migration.
+//
+// 2. Partial unique indexes:
+//    "Only one default address per customer" is a PostgreSQL
+//    partial unique index and should be added through SQL:
+//
+//    CREATE UNIQUE INDEX ... ON customer_addresses(customer_id)
+//    WHERE is_default = true AND status = 'ACTIVE';
+//
+// 3. Order state machine:
+//    Prisma enum stores valid states but does NOT enforce valid
+//    transitions. OrderService must enforce transitions.
+//
+// 4. Money:
+//    Decimal(12,2) is authoritative. Never calculate business
+//    money using JavaScript floating-point numbers.
+//
+// 5. Snapshots:
+//    Order.customerSnapshot, Order.addressSnapshot and
+//    OrderItem snapshots are historical records and must not be
+//    rewritten when current customer/address/menu data changes.
+//
+// 6. Payment:
+//    Payment.status and Order.paymentStatus are independent from
+//    Order.status.
+//
+// 7. Audit:
+//    Application code must write AuditLog records for critical
+//    actions. Ordinary staff must not be able to edit/delete them.
+//
+// 8. Outbox:
+//    Business transaction and OutboxEvent creation must occur in
+//    the same database transaction.
+//
+// 9. Historical records:
+//    Orders, payments, refunds, stock movements, timelines,
+//    audit logs and other business history must not be physically
+//    deleted through normal application operations.
+//
+// 10. Migration:
+//     Development may use Prisma migrations.
+//     Production must use:
+//         prisma migrate deploy
+//     Never use `prisma db push` as the production deployment
+//     mechanism.
+//
+// 11. Seed:
+//     Initial seed should create:
+//       - one default store
+//       - seven roles:
+//         CUSTOMER, SUPER_ADMIN, OWNER, MANAGER, KITCHEN,
+//         DELIVERY, ACCOUNTING
+//       - baseline permissions
+//       - one OWNER / SUPER_ADMIN bootstrap account through a
+//         secure setup process, not a hard-coded production password.
+//
+// 12. Business validation not represented by DB alone:
+//       - GPS range validation
+//       - delivery polygon containment
+//       - store opening/accepting/cutoff rules
+//       - option min/max rules
+//       - customer cancellation policy
+//       - state transition permissions
+//       - promotion stacking/usage race handling
+//       - stock reconciliation
+//       - printer retry policy
+//
+// ============================================================
+// END OF SCHEMA v1.0
+// ============================================================

@@ -1,0 +1,2344 @@
+THANAM FOOD — MASTER PROJECT BLUEPRINT v1.0
+สถานะ: ARCHITECTURE FREEZE / READY FOR AI PROJECT GENERATION
+
+============================================================
+1. PROJECT OVERVIEW
+============================================================
+ชื่อระบบ: ร้านอาหารท่าน้ำ (Thanam Food)
+
+ระบบนี้ไม่ใช่เพียงเว็บไซต์สั่งอาหาร แต่เป็น Restaurant Operating System
+ที่รองรับ:
+- Customer Website
+- Online Ordering
+- POS
+- Back Office
+- Kitchen
+- Delivery
+- Accounting
+- Table / QR / Dine-in
+- Inventory
+- Printer
+- Notification
+- Reports
+- Audit
+
+Core Channels:
+ONLINE, POS, TABLE, BACK_OFFICE
+
+Fulfillment:
+DELIVERY, PICKUP, DINE_IN
+
+หลักการสำคัญ:
+- Online + POS + Table ใช้ Core เดียวกัน
+- PostgreSQL เป็น Source of Truth
+- Backend เป็น Business Authority
+- Frontend ห้ามตัดสิน Business Rule เอง
+- Modular Monolith + API
+- Docker-first / Build Once → Deploy Anywhere
+- ออกแบบให้รองรับหลายสาขาและหลายผู้จัดส่งตั้งแต่ต้น
+- Historical business records ไม่ควรถูกลบทางกายภาพ
+
+============================================================
+2. LANGUAGE / LOCALIZATION — LOCKED / NON-NEGOTIABLE
+============================================================
+ภาษาหลักของระบบต้องเป็น “ภาษาไทย”
+
+ส่วนที่ผู้ใช้งานมองเห็นทั้งหมดต้องใช้ภาษาไทยเป็นค่าเริ่มต้น:
+- Customer Website
+- Back Office
+- POS
+- Kitchen
+- Delivery
+- Accounting
+- Table / QR
+- Notification
+- Form
+- Button
+- Menu
+- Validation Message
+- Error Message
+- Order Status
+- Payment Status ที่แสดงแก่ผู้ใช้
+- Empty State / Loading / Success / Warning
+- Dialog / Confirmation
+- Report / Dashboard ที่ผู้ใช้ทั่วไปมองเห็น
+
+ข้อกำหนด:
+- ภาษาไทยเป็น Default Language
+- Version แรกไม่จำเป็นต้องทำภาษาอังกฤษ
+- ระบบต้องออกแบบโครงสร้างเผื่อ Multi-language ในอนาคต
+- ใช้ UTF-8 / Unicode อย่างสมบูรณ์
+- Font หลัก: Noto Sans Thai
+- Timezone: Asia/Bangkok
+- Currency: THB (บาท)
+- วันที่และเวลาที่แสดงแก่ผู้ใช้ต้องเหมาะสมกับประเทศไทย
+- หาก AI สร้างข้อความ UI ใหม่เอง ต้องใช้ภาษาไทย
+- ห้ามให้ข้อความ Technical เช่น SQL error, stack trace, server path, API key หลุดสู่ผู้ใช้
+
+Technical identifiers ยังคงใช้ภาษาอังกฤษ:
+- Database table / column
+- API endpoint
+- TypeScript variable/function
+- Class
+- Service
+- Enum code
+- Permission code
+- Event code
+
+ตัวอย่าง:
+UI: “ยืนยันคำสั่งซื้อ”
+API: POST /api/v1/orders
+Service: OrderService
+Database: order_status
+
+============================================================
+3. CUSTOMER JOURNEY
+============================================================
+เปิดเว็บไซต์
+→ ดูสถานะร้าน
+→ ดูเมนู
+→ Login / สมัครสมาชิก
+→ ที่อยู่ + GPS
+→ เลือกอาหาร + Options
+→ Cart
+→ Cart หมดอายุ 1 วัน
+→ Checkout
+→ วิธีรับอาหาร
+→ วิธีชำระเงิน
+→ ยืนยัน Order
+→ รอร้านยืนยัน
+→ ร้านรับ Order
+→ กำลังทำอาหาร
+→ อาหารพร้อมจัดส่ง
+→ กำลังจัดส่ง
+→ ถึงปลายทาง
+→ จัดส่งสำเร็จ
+→ ชำระเงินเรียบร้อย
+→ เสร็จสมบูรณ์
+→ ประวัติ
+→ รีวิว
+→ สั่งซ้ำ
+
+============================================================
+4. STORE STATUS / BUSINESS HOURS
+============================================================
+Customer-facing status:
+1. เปิดรับออเดอร์ — ดูเมนู/เพิ่มตะกร้า/สั่งได้
+2. ปิดรับออเดอร์ — ดูเมนูได้ แต่สั่งไม่ได้ พร้อมแสดงเวลาเปิดรับครั้งถัดไป
+3. ปิดร้าน — ดูเมนูได้ พร้อมแสดงเวลาเปิดครั้งถัดไป
+
+Back Office ต้องจัดการ:
+- เวลาเปิดร้าน
+- เวลาเริ่มรับ Order
+- เวลา Cutoff
+- เวลาปิดร้าน
+- วันหยุด
+- วันหยุดพิเศษ
+- ปิดร้านเฉพาะช่วงเวลา
+- Manual Override
+- Auto Transition
+
+============================================================
+5. CUSTOMER AUTHENTICATION
+============================================================
+- Browse ได้โดยไม่ Login
+- ต้อง Login ก่อน Add Cart / Checkout / Order
+- ใช้ Phone + OTP
+- Version แรกไม่ใช้ LINE / Google / Facebook
+- customer_id ต้องคงที่แม้เปลี่ยนเบอร์
+- OTP 6 หลัก
+- อายุประมาณ 5 นาที
+- ใช้ครั้งเดียว
+- จำกัดจำนวนครั้งที่กรอกผิด
+- จำกัดการขอ OTP ซ้ำ
+- เก็บ OTP แบบ Hash
+- Secure HttpOnly Session Cookie
+- Session มีวันหมดอายุและ Revoke ได้
+
+============================================================
+6. ADDRESS / GPS / DELIVERY ZONE
+============================================================
+รองรับหลายที่อยู่:
+- บ้าน
+- ที่ทำงาน
+- หอพัก
+- อื่น ๆ
+
+ข้อมูล:
+label, recipient_name, recipient_phone,
+house_no, moo, soi, road,
+subdistrict, district, province, postal_code,
+additional_detail, delivery_note,
+latitude, longitude, is_default, status
+
+- รองรับ Google Maps
+- Backend ตรวจ Delivery Zone
+- ใช้ PostGIS
+- Delivery Zone เป็น Polygon
+- แต่ละ Zone กำหนดค่าจัดส่งได้
+- รองรับ minimum order / maximum distance
+- Order ต้องเก็บ Address Snapshot + GPS Snapshot
+
+============================================================
+7. MENU / OPTIONS / PRICE
+============================================================
+Menu:
+- Category
+- Menu Item
+- Option Group
+- Option
+- Availability
+- Sold Out
+- Price History
+
+Backend เป็นผู้คำนวณราคา
+Frontend ห้ามเชื่อราคาจาก Client
+
+Options รองรับ:
+- Required / Optional
+- Minimum Selection
+- Maximum Selection
+- ราคาเพิ่ม
+
+เมื่อราคาหรือเมนูเปลี่ยนระหว่าง Checkout:
+ต้องแจ้ง PRICE_CHANGED และให้ลูกค้ายืนยันใหม่
+ห้ามเปลี่ยนราคาเงียบ ๆ
+
+============================================================
+8. CART
+============================================================
+Cart ประกอบด้วย:
+- Menu Items
+- Quantity
+- Options
+- Notes
+- Item Price
+- Subtotal
+- Discount
+- Delivery Fee
+- Grand Total
+
+Cart:
+ACTIVE / EXPIRED / CONVERTED / ABANDONED
+
+Cart ที่ยังไม่ Confirm หมดอายุหลัง 1 วัน
+เมื่อ Reorder:
+สร้าง Cart ใหม่ และตรวจสอบ Menu / Price / Options / Availability ใหม่
+
+============================================================
+9. CHECKOUT / ORDER CREATION
+============================================================
+Checkout ต้องตรวจซ้ำทั้งหมดที่ Backend:
+- Session
+- Customer
+- Cart
+- Store
+- Store Status
+- Menu
+- Availability
+- Options
+- Current Price
+- Promotion
+- Address
+- GPS
+- Delivery Zone
+- Fulfillment
+- Payment
+
+Order Creation ต้องใช้ Transaction:
+BEGIN
+→ Validate
+→ Create Order
+→ Create Order Items
+→ Create Snapshots
+→ Create Timeline
+→ Create Payment
+→ Create Outbox Event
+→ COMMIT
+
+หากผิดพลาดต้อง ROLLBACK
+
+Order Snapshot ต้องเก็บ:
+- Customer
+- Address
+- GPS
+- Items
+- Item Name
+- Price
+- Quantity
+- Options
+- Discount
+- Delivery Fee
+- Total
+- Fulfillment
+- Payment Information ที่จำเป็น
+
+Order เก่าไม่เปลี่ยนตาม Menu / Address / Customer ที่แก้ภายหลัง
+
+============================================================
+10. ORDER STATUS / STATE MACHINE
+============================================================
+Internal State:
+PENDING_CONFIRMATION
+→ ACCEPTED
+→ PREPARING
+→ READY
+→ DELIVERY
+→ ARRIVED
+→ DELIVERED
+→ COMPLETED
+
+Dine-in:
+READY → SERVED → COMPLETED
+
+Abnormal exits:
+REJECTED
+CANCELLED
+
+Customer-facing:
+- รอร้านยืนยัน
+- ร้านรับออเดอร์แล้ว
+- กำลังทำอาหาร
+- อาหารพร้อมจัดส่ง
+- กำลังจัดส่ง
+- ถึงปลายทาง
+- จัดส่งสำเร็จ
+- เสร็จสมบูรณ์
+
+Issues แยกจาก Order Status:
+- ลูกค้าขอยกเลิก
+- ติดต่อผู้รับไม่ได้
+- ปัญหาการชำระเงิน
+- วัตถุดิบไม่พร้อม
+- อยู่นอกพื้นที่
+- หาที่อยู่ไม่พบ
+- ไม่สามารถเก็บเงินได้
+
+ห้ามกระโดดสถานะโดยไม่มี Transition Rule
+
+COMPLETED เป็น Final Business State
+การแก้ไขย้อนหลังต้องใช้ Adjustment / Refund / Correction + Audit
+ห้ามแก้ Order เดิมโดยตรง
+
+============================================================
+11. ORDER TRANSITION PERMISSION
+============================================================
+PENDING_CONFIRMATION → ACCEPTED:
+OWNER / MANAGER / KITCHEN
+
+PENDING_CONFIRMATION → REJECTED:
+OWNER / MANAGER / KITCHEN
+
+ACCEPTED → PREPARING:
+OWNER / MANAGER / KITCHEN
+
+PREPARING → READY:
+OWNER / MANAGER / KITCHEN
+
+READY → DELIVERY:
+OWNER / MANAGER / DELIVERY
+
+READY → SERVED:
+OWNER / MANAGER / KITCHEN
+
+DELIVERY → ARRIVED:
+DELIVERY
+
+ARRIVED → DELIVERED:
+DELIVERY
+
+DELIVERED → COMPLETED:
+SYSTEM / AUTHORIZED STAFF
+
+SERVED → COMPLETED:
+OWNER / MANAGER / KITCHEN
+
+Super Admin เป็น System / Emergency Role ไม่ใช่ผู้รับ Order ปกติ
+
+Customer ยกเลิกได้ก่อน PREPARING
+หลัง PREPARING ต้องเข้าสู่ Staff Decision
+
+Reject ต้องมี Reason:
+OUT_OF_STOCK
+OUTSIDE_DELIVERY_ZONE
+STORE_ISSUE
+CUSTOMER_UNREACHABLE
+PAYMENT_ISSUE
+OTHER
+
+============================================================
+12. PAYMENT
+============================================================
+Payment แยกจาก Order Status
+
+Methods:
+- CASH_ON_DELIVERY
+- TRANSFER / PROMPTPAY
+
+Transfer:
+QR
+→ Upload Slip
+→ Accounting Verify
+→ Approve / Reject
+
+Payment Status ตัวอย่าง:
+PENDING
+PAID
+REJECTED
+REFUNDED
+PARTIALLY_REFUNDED
+
+- COD ต้องเก็บจำนวนเงินที่ต้องเก็บ
+- Refund ต้องไม่เกินยอดที่จ่ายแล้วลบยอดคืนไปแล้ว
+- Payment Verification ต้องใช้ Transaction และ Audit
+- Payment failure ไม่ควรทำลาย Order History
+
+============================================================
+13. DELIVERY
+============================================================
+Flow:
+อาหารพร้อมจัดส่ง
+→ รอจัดส่ง
+→ มอบหมายผู้จัดส่ง
+→ ผู้จัดส่งรับอาหาร
+→ กำลังจัดส่ง
+→ ถึงปลายทาง
+→ ยืนยันส่งสำเร็จ
+→ ตรวจสอบ/ยืนยันการชำระเงิน
+→ เสร็จสมบูรณ์
+
+Delivery State:
+UNASSIGNED
+→ ASSIGNED
+→ PICKED_UP
+→ EN_ROUTE
+→ ARRIVED
+→ DELIVERED
+
+Abnormal:
+FAILED / CANCELLED
+
+สำคัญ:
+Assigned ≠ Picked Up
+รับงาน ≠ รับอาหารออกจากร้าน
+
+รองรับหลาย Driver ตั้งแต่ต้น
+Phase 1 Owner สามารถเป็น Driver เองได้
+ยังไม่จำเป็นต้องมี Live GPS
+
+============================================================
+14. ROLES / RBAC
+============================================================
+7 Roles:
+CUSTOMER
+SUPER_ADMIN
+OWNER
+MANAGER
+KITCHEN
+DELIVERY
+ACCOUNTING
+
+Permission Model:
+Role → Permission → Action
+
+Levels:
+VIEW
+MANAGE
+APPROVE_CRITICAL
+
+Tables:
+roles
+permissions
+role_permissions
+staff_roles
+staff_permission_overrides
+staff_store_assignments
+
+หลักการ Least Privilege
+
+หน้าที่:
+SUPER_ADMIN = System / Emergency
+OWNER = Business-wide
+MANAGER = Daily Operations
+KITCHEN = รับ/ทำ/พร้อมอาหาร/จัดการเมนูหมด
+DELIVERY = งานจัดส่ง
+ACCOUNTING = Payment / Refund / Shift / Cash
+
+Kitchen สามารถ Accept Order ได้ตาม Workflow
+
+============================================================
+15. SYSTEM ARCHITECTURE
+============================================================
+ใช้ Modular Monolith + API
+ไม่ใช้ Microservices ใน Version แรก
+
+Internet
+├── Customer Website
+└── Back Office / POS
+        ↓
+      API / Backend
+        ↓
+    PostgreSQL
+
+External:
+Redis
+Worker
+Storage
+Realtime
+Printer
+Notification
+External Services
+
+หลัก:
+1. DB Source of Truth
+2. Frontend ไม่ต่อ DB โดยตรง
+3. Business Rule อยู่ Backend
+4. Order ไม่ผูกกับ Printer
+5. Realtime เป็น Transport ไม่ใช่ Source of Truth
+6. External Service ต้องเปลี่ยน Provider ได้
+7. รองรับหลาย Printer
+8. รองรับหลาย Driver
+9. รองรับ Delivery / Pickup / Dine-in
+10. Settings จัดการจาก Back Office
+11. Central Audit
+12. Customer และ Back Office แยก Concept แต่ใช้ Core/API เดียวกัน
+
+============================================================
+16. TECH STACK
+============================================================
+Frontend:
+Next.js
+TypeScript
+Responsive UI
+
+Backend:
+Node.js
+TypeScript
+Modular Monolith REST API
+
+ORM:
+Prisma
+
+Database:
+PostgreSQL
+PostGIS
+
+Cache / Queue:
+Redis
+
+Realtime:
+WebSocket / Socket-based realtime ผ่าน Backend
+
+Reverse Proxy:
+Nginx
+
+Container:
+Docker / Docker Compose
+
+Storage:
+Persistent Storage / Object Storage abstraction
+
+Font:
+Noto Sans Thai
+
+============================================================
+17. DATABASE PRINCIPLES
+============================================================
+- PostgreSQL เป็น Source of Truth
+- UUID Primary Key
+- Money = NUMERIC(12,2)
+- ห้ามใช้ Float/Double กับเงิน
+- Time = TIMESTAMPTZ
+- Flexible fields ใช้ JSONB เท่าที่จำเป็น
+- PostGIS สำหรับ Geometry
+- Foreign Key ทุกความสัมพันธ์สำคัญ
+- Core business fields เป็น NOT NULL
+- Historical records ไม่ควรลบ
+- OTP / Session token ต้อง Hash
+- Important mutations ต้องมี Idempotency
+- Important operations ใช้ Transaction
+- Row Lock เมื่อจำเป็น
+- Prisma Migrations อยู่ใน Repository
+- Production ใช้ prisma migrate deploy
+- ห้ามใช้ db push ใน Production
+
+============================================================
+18. DOMAIN TABLES
+============================================================
+Store:
+stores
+store_business_hours
+store_special_closures
+delivery_zones
+
+Customer/Auth:
+customers
+customer_addresses
+otp_requests
+auth_sessions
+
+Staff/RBAC:
+staff
+staff_accounts
+roles
+permissions
+role_permissions
+staff_roles
+staff_permission_overrides
+staff_store_assignments
+
+Menu:
+menu_categories
+menu_items
+option_groups
+options
+menu_item_option_groups
+menu_item_availability
+price_histories
+
+Promotion:
+promotions
+promotion_usages
+
+Cart/Order:
+carts
+cart_items
+orders
+order_items
+order_timelines
+order_issues
+
+Payment:
+payments
+payment_slips
+refunds
+shifts
+cash_movements
+
+Kitchen:
+kitchen_stations
+kitchen_jobs
+kitchen_job_items
+
+Delivery:
+delivery_jobs
+
+Table/Dine-in:
+restaurant_tables
+table_qr_codes
+table_sessions
+table_session_customers
+staff_calls
+
+Printer:
+printers
+printer_routes
+print_jobs
+
+Inventory:
+ingredients
+stock_balances
+stock_movements
+recipes
+recipe_ingredients
+
+System:
+reviews
+notifications
+notification_preferences
+files
+file_relations
+outbox_events
+background_jobs
+audit_logs
+settings
+
+============================================================
+19. ORDER DATA DESIGN
+============================================================
+orders ต้องมีอย่างน้อย:
+id
+order_number
+store_id
+customer_id
+order_channel
+fulfillment_type
+status
+subtotal
+item_discount
+promotion_discount
+delivery_fee
+grand_total
+payment_method
+payment_status
+customer_snapshot
+address_snapshot
+delivery_zone_id
+table_id
+table_session_id
+note
+created_at
+updated_at
+
+order_items:
+order_id
+menu_item_id
+item_name_snapshot
+unit_price
+quantity
+subtotal
+discount
+total
+notes
+option_snapshot
+created_at
+
+Unique:
+order_number
+reviews.order_id
+settings(store_id,key)
+อื่น ๆ ตาม Domain
+
+============================================================
+20. INVENTORY
+============================================================
+Menu ≠ Ingredient
+
+Inventory:
+- Ingredient
+- Stock Balance
+- Stock Movement
+- Recipe
+- Recipe Ingredient
+
+Stock Movement ต้องเป็น Historical Record
+
+หาก Stock Deduction ล้มเหลว:
+- ห้าม Rollback Order ที่ยืนยันแล้วเพียงเพราะ Inventory
+- สร้าง Reconciliation / Background Job
+- Retry
+- แจ้ง Staff
+
+============================================================
+21. KITCHEN
+============================================================
+Kitchen Station รองรับหลายสถานี
+
+Kitchen Job:
+PENDING
+→ IN_PROGRESS
+→ READY
+→ COMPLETED
+
+Order READY เมื่อ Job ที่จำเป็นพร้อมตาม Rule
+
+Kitchen ไม่ควรแก้ Order โดยตรง
+ใช้ Kitchen Service / Order Service
+
+============================================================
+22. PRINTER
+============================================================
+Printer เป็น Subsystem แยก
+
+รองรับ:
+- Kitchen Printer
+- Receipt Printer
+- Packing Printer
+- อื่น ๆ ในอนาคต
+
+Print Job:
+PENDING
+→ PRINTING
+→ PRINTED
+
+ผิดพลาด:
+FAILED
+
+Printer Fail ไม่ทำให้ Order Fail
+
+ต้อง:
+- Retry
+- Reprint
+- Test Print
+- Health Check
+- Routing
+
+============================================================
+23. TABLE / DINE-IN / QR
+============================================================
+รองรับใน Architecture ตั้งแต่ต้น
+
+restaurant_tables
+table_qr_codes
+table_sessions
+table_session_customers
+staff_calls
+
+QR:
+- Tokenized
+- Validate Token
+- Validate Store
+- Validate Table
+
+หนึ่ง Table Session มีหลาย Customer และหลาย Order ได้
+
+Combined Bill เป็น View ของ Outstanding Orders
+ไม่สร้าง Order ใหม่เพื่อรวมบิล
+
+Staff Call:
+- เก็บ DB
+- Realtime Alert
+- Deduplicate Active Call
+
+============================================================
+24. PROMOTION
+============================================================
+Promotion ตรวจ:
+- Active
+- Start / End
+- Time
+- Minimum Spend
+- Customer Eligibility
+- Global Limit
+- Usage Limit
+- Item / Category
+- Stackable
+- Priority
+
+Backend เป็นผู้คำนวณ Discount
+
+Order ต้องเก็บ Promotion Snapshot
+Promotion Usage ต้องป้องกัน Race Condition
+
+============================================================
+25. REVIEW
+============================================================
+Review ได้เมื่อ:
+- Order COMPLETED
+- Customer เป็นเจ้าของ Order
+- 1 Review ต่อ 1 Order
+
+ต้องตรวจ Ownership ที่ Backend
+
+============================================================
+26. REALTIME / EVENT ARCHITECTURE
+============================================================
+ใช้:
+Transaction
+→ Outbox
+→ Event Processor
+→ Subscribers
+
+Events:
+ORDER_CREATED
+ORDER_ACCEPTED
+ORDER_REJECTED
+ORDER_CANCELLED
+KITCHEN_STARTED
+KITCHEN_READY
+DELIVERY_ASSIGNED
+DELIVERY_PICKED_UP
+DELIVERY_STARTED
+DELIVERY_ARRIVED
+DELIVERY_COMPLETED
+PAYMENT_SUBMITTED
+PAYMENT_VERIFIED
+PAYMENT_REJECTED
+PAYMENT_REFUNDED
+ORDER_COMPLETED
+
+Event มี:
+event_id
+event_type
+aggregate_type
+aggregate_id
+store_id
+occurred_at
+actor
+data
+
+Socket Rooms:
+customer:{customerId}
+staff:{staffId}
+store:{storeId}
+order:{orderId}
+table:{tableId}
+
+Socket ไม่ใช่ Source of Truth
+Reconnect → API Sync → DB
+
+============================================================
+27. NOTIFICATION
+============================================================
+Notification Engine แยกจาก Order
+
+ตัวอย่าง:
+Order Created
+Order Accepted
+Preparing
+Ready
+Delivery Started
+Arrived
+Delivered
+Payment Verified
+Payment Rejected
+Cancellation
+Promotion
+
+Notification ต้อง Retry ได้
+ไม่ให้ Notification failure ทำลาย Order
+
+============================================================
+28. AUDIT / LOGGING
+============================================================
+Audit Log เป็น Append-only
+
+บันทึก:
+actor
+role
+timestamp
+action
+module
+entity_type
+entity_id
+before
+after
+reason
+IP
+device
+ตามความเหมาะสม
+
+Critical Actions:
+- Order state change
+- Payment verify/reject/refund
+- Price change
+- Permission change
+- Staff role change
+- Promotion change
+- Settings change
+- Inventory correction
+- Shift close
+- Important customer/admin actions
+
+Staff ทั่วไปห้ามแก้ Audit Log
+
+Application Log ≠ Audit Log
+
+============================================================
+29. API CONTRACT
+============================================================
+Base:
+ /api/v1
+
+Success:
+{
+  "success": true,
+  "data": {}
+}
+
+Error:
+{
+  "success": false,
+  "error": {
+    "code": "MENU_ITEM_UNAVAILABLE",
+    "message": "เมนูนี้หมดชั่วคราว",
+    "request_id": "req_abc123"
+  }
+}
+
+HTTP:
+200 201 204
+400 401 403 404
+409 422 429
+500 503
+
+Important endpoints:
+POST /api/v1/auth/customer/otp/request
+POST /api/v1/auth/customer/otp/verify
+
+GET/PATCH /api/v1/customer/profile
+
+GET /api/v1/store
+GET /api/v1/store/status
+GET /api/v1/store/business-hours
+
+GET /api/v1/menu/categories
+GET /api/v1/menu/items
+GET /api/v1/menu/items/:id
+
+GET /api/v1/cart
+POST /api/v1/cart/items
+PATCH /api/v1/cart/items/:id
+DELETE /api/v1/cart/items/:id
+
+POST /api/v1/checkout/validate
+
+POST /api/v1/orders
+GET /api/v1/orders
+GET /api/v1/orders/:id
+POST /api/v1/orders/:id/cancel
+POST /api/v1/orders/:id/reorder
+
+Order commands:
+POST /orders/:id/accept
+POST /orders/:id/reject
+POST /orders/:id/start-preparation
+POST /orders/:id/ready
+POST /orders/:id/start-delivery
+POST /orders/:id/arrive
+POST /orders/:id/delivered
+POST /orders/:id/served
+POST /orders/:id/complete
+
+Payment:
+GET/POST payment
+POST slip
+POST verify
+POST reject
+POST refund
+
+Delivery:
+list
+assign
+accept
+pickup
+start
+arrive
+complete
+issue
+
+Printer:
+CRUD
+test
+health
+print
+retry
+reprint
+cancel
+
+Table:
+table
+QR
+session
+staff call
+
+Review:
+create/list
+
+Promotion:
+list/apply/admin CRUD
+
+============================================================
+30. ERROR CATALOG
+============================================================
+INVALID_OTP
+OTP_EXPIRED
+OTP_TOO_MANY_ATTEMPTS
+OTP_RESEND_TOO_SOON
+SESSION_EXPIRED
+UNAUTHORIZED
+FORBIDDEN
+STORE_NOT_FOUND
+STORE_NOT_ACCEPTING_ORDERS
+STORE_CLOSED
+STORE_MAINTENANCE
+MENU_ITEM_NOT_FOUND
+MENU_ITEM_UNAVAILABLE
+MENU_ITEM_SOLD_OUT
+OPTION_NOT_FOUND
+INVALID_OPTION_SELECTION
+PRICE_CHANGED
+CART_NOT_FOUND
+CART_EXPIRED
+CART_EMPTY
+CART_ITEM_NOT_FOUND
+ORDER_NOT_FOUND
+INVALID_ORDER_TRANSITION
+ORDER_ALREADY_CANCELLED
+ORDER_ALREADY_COMPLETED
+ORDER_CANNOT_BE_CANCELLED
+OUTSIDE_DELIVERY_ZONE
+PAYMENT_NOT_FOUND
+PAYMENT_ALREADY_VERIFIED
+PAYMENT_ALREADY_REFUNDED
+PAYMENT_AMOUNT_INVALID
+PAYMENT_SLIP_REQUIRED
+PAYMENT_REJECTED
+DELIVERY_JOB_NOT_FOUND
+DRIVER_NOT_ASSIGNED
+INVALID_DELIVERY_TRANSITION
+DELIVERY_ALREADY_COMPLETED
+IDEMPOTENCY_CONFLICT
+VALIDATION_ERROR
+DATABASE_ERROR
+SERVICE_UNAVAILABLE
+INTERNAL_ERROR
+
+ห้ามส่ง:
+- SQL
+- DB query
+- Stack trace
+- Server Path
+- Secret
+- API Key
+- Token
+- Internal Config
+
+============================================================
+31. FAILURE / RECOVERY
+============================================================
+หลัก:
+Subsystem ล้มเหลวต้องไม่ทำลาย Core Business Data
+
+Double-click:
+→ Idempotency-Key
+→ สร้าง Order เดียว
+
+Internet Disconnect:
+→ Retry ด้วย Idempotency-Key
+→ Sync จาก API
+→ ห้ามสร้าง Order ใหม่แบบสุ่ม
+
+Price Change:
+→ PRICE_CHANGED
+→ Customer Confirm ใหม่
+
+Sold Out:
+→ MENU_ITEM_SOLD_OUT
+→ ไม่สร้าง Order
+
+Store Close:
+→ STORE_NOT_ACCEPTING_ORDERS
+→ ไม่สร้าง Order
+
+Invalid Slip:
+→ Payment REJECTED
+→ Order History ยังคงอยู่
+→ อัปโหลดใหม่ตาม Policy
+
+Printer Down:
+→ Order ยังคงอยู่
+→ Print Job FAILED
+→ Retry
+
+Redis Down:
+→ PostgreSQL ยังเป็น Source of Truth
+→ Function ที่ต้องใช้ Redis อาจ 503
+→ ห้ามทำลายข้อมูล
+
+Worker Down:
+→ Job/Outbox คงอยู่
+→ Restart แล้ว Retry
+
+Socket Down:
+→ Reconnect
+→ API Sync
+
+Driver Issue:
+→ Delivery History คงอยู่
+→ Reassign
+
+Duplicate Order:
+→ ไม่ลบอัตโนมัติ
+→ แจ้ง Staff พิจารณา
+
+Promotion Race:
+→ Transaction / Lock / Atomic Update
+
+Stock Deduction Failure:
+→ ไม่ Rollback Confirmed Order
+→ Reconcile / Retry
+
+============================================================
+32. UI / UX
+============================================================
+แนวทาง:
+Modern Thai Restaurant
+
+สี:
+- Orange / Copper
+- Dark Green
+- Off-white
+- White Surface
+- Dark Text
+- Semantic Green / Amber / Red / Blue
+
+Font:
+Noto Sans Thai
+
+Spacing:
+4, 8, 12, 16, 20, 24, 32, 40, 48, 64
+
+Radius:
+6, 10, 14, 16, 999
+
+Responsive:
+Mobile <640
+Tablet 640–1023
+Laptop 1024–1279
+Desktop >=1280
+
+Customer Pages:
+Home
+Menu
+Food Detail
+Login / OTP
+Cart
+Checkout
+Address / GPS
+Order Tracking
+History
+Review
+Account
+
+Mobile Bottom Navigation:
+Home / Menu / Cart / Account
+
+Back Office:
+Dashboard
+Orders
+Kitchen
+Delivery
+Payments
+Menu
+Promotion
+Customers
+Inventory
+Printers
+Staff
+Reports
+Audit
+Settings
+
+POS:
+Speed-first
+ใช้ Core Order Service เดียวกัน
+
+UI ต้องมี:
+Loading
+Empty
+Error
+Offline
+Network Error
+Double-click protection
+Confirmation
+Accessible Focus
+Keyboard
+Screen Reader support
+Contrast
+ไม่ใช้สีอย่างเดียวสื่อ Status
+Touch Target ขนาดเหมาะสม
+
+============================================================
+33. BACKEND MODULES
+============================================================
+apps/api/src/modules/
+
+auth
+customer
+store
+menu
+cart
+order
+payment
+delivery
+kitchen
+promotion
+inventory
+printer
+table
+staff
+notification
+audit
+file
+report
+
+Services:
+OrderService
+PaymentService
+DeliveryService
+KitchenService
+PromotionService
+InventoryService
+PrinterService
+NotificationService
+ฯลฯ
+
+Controller:
+รับ Request
+→ Validate
+→ Authorization
+→ Call Service
+→ Return Response
+
+Controller ห้ามมี Business Logic จำนวนมาก
+
+หลีกเลี่ยงไฟล์ใหญ่ เช่น everything.ts
+
+============================================================
+34. PROJECT FOLDER STRUCTURE
+============================================================
+thanam-food/
+├── apps/
+│   ├── web/
+│   │   ├── app/
+│   │   │   ├── (customer)/
+│   │   │   ├── admin/
+│   │   │   └── pos/
+│   │   ├── components/
+│   │   ├── features/
+│   │   ├── lib/
+│   │   └── styles/
+│   │
+│   └── api/
+│       └── src/
+│           ├── modules/
+│           ├── common/
+│           ├── config/
+│           ├── database/
+│           ├── events/
+│           ├── jobs/
+│           └── main.ts
+│
+├── packages/
+│   ├── shared/
+│   ├── types/
+│   ├── validation/
+│   └── ui/
+│
+├── prisma/
+│   ├── schema.prisma
+│   ├── seed.ts
+│   └── migrations/
+│
+├── docs/
+│   ├── MASTER-BLUEPRINT.md
+│   ├── DATABASE-SPECIFICATION.md
+│   ├── API-CONTRACT.md
+│   ├── BUSINESS-RULES.md
+│   ├── STATE-MACHINE.md
+│   ├── RBAC.md
+│   ├── ERROR-CATALOG.md
+│   ├── TESTING.md
+│   └── DEPLOYMENT.md
+│
+├── docker/
+│   ├── nginx/
+│   ├── postgres/
+│   └── scripts/
+│
+├── storage/
+├── tests/
+│   ├── unit/
+│   ├── integration/
+│   ├── api/
+│   ├── e2e/
+│   ├── security/
+│   └── state-machine/
+│
+├── .env.example
+├── .gitignore
+├── docker-compose.yml
+├── docker-compose.prod.yml
+├── package.json
+├── README.md
+└── LICENSE
+
+============================================================
+35. SECURITY
+============================================================
+ต้องป้องกัน:
+- SQL Injection
+- XSS
+- CSRF
+- Mass Assignment
+- IDOR
+- Broken Access Control
+- OTP Brute Force
+- OTP Replay
+- Session Hijacking
+- File Upload Attack
+- Duplicate Submit
+
+หลัก:
+- Backend Validate ทุกครั้ง
+- Object Ownership Check
+- Permission Check
+- Rate Limit
+- Secure Cookie
+- Secrets ใน .env
+- ห้าม Commit Secrets
+- File Upload ตรวจ MIME / Extension / Signature / Size
+- ไม่เปิดเผย Internal Error
+
+============================================================
+36. BACKUP / DEPLOYMENT
+============================================================
+Docker-first
+
+Production:
+Internet
+→ HTTPS
+→ Nginx
+→ Frontend / API
+→ PostgreSQL / Redis / Worker / Storage
+
+Public:
+80
+443
+
+ห้าม Public:
+5432 PostgreSQL
+6379 Redis
+Internal API Ports
+
+Health:
+GET /api/health
+
+ต้องตรวจ:
+API
+Database
+Redis
+Storage
+Worker
+
+Backup:
+- PostgreSQL pg_dump
+- Backup แยกจาก DB Server
+- Retention Policy
+- Restore Test
+- Persistent Docker Volume
+
+Prisma:
+Development:
+migration
+Production:
+prisma migrate deploy
+
+Secrets:
+.env
+ไม่เก็บใน Git
+
+============================================================
+37. TESTING
+============================================================
+Unit
+Integration
+API
+E2E
+Permission
+State Machine
+Security
+Failure / Recovery
+Migration
+
+E2E หลัก:
+OTP
+→ Menu
+→ Options
+→ Cart
+→ Checkout
+→ GPS
+→ Delivery Zone
+→ Payment
+→ Order
+→ Kitchen
+→ Delivery
+→ Completed
+→ Review
+→ Reorder
+
+ต้องทดสอบ Invalid Transition:
+PENDING → COMPLETED = Fail
+PENDING → DELIVERY = Fail
+DELIVERED → PREPARING = Fail
+COMPLETED → PREPARING = Fail
+
+Permission Test ทุก Role
+
+Security:
+SQL Injection
+XSS
+CSRF
+IDOR
+Broken Access Control
+OTP Brute Force
+OTP Replay
+Session Hijacking
+File Upload
+
+============================================================
+38. IMPLEMENTATION ORDER
+============================================================
+ห้ามเริ่มเขียน Code แบบสุ่ม
+
+ลำดับ:
+1. Master Blueprint
+2. Folder Structure
+3. Prisma Schema
+4. Prisma Migration
+5. Seed Data
+6. Backend Foundation
+7. Authentication
+8. Store / Business Hours
+9. Menu
+10. Customer / Address / GPS
+11. Cart
+12. Order Engine
+13. Payment
+14. Kitchen
+15. Delivery
+16. Realtime / Outbox
+17. Notification
+18. Printer
+19. Back Office
+20. POS
+21. Table / QR
+22. Inventory
+23. Promotion
+24. Review
+25. Reports
+26. Security Hardening
+27. Tests
+28. Docker
+29. Deployment
+30. Backup / Monitoring
+
+============================================================
+39. AI PROJECT GENERATION RULES
+============================================================
+AI ที่นำ Blueprint นี้ไปสร้าง Project ต้อง:
+
+1. อ่าน Blueprint ทั้งหมดก่อนเริ่มเขียน Code
+2. ถือข้อที่ระบุ LOCKED / NON-NEGOTIABLE เป็นข้อบังคับ
+3. ห้ามเปลี่ยน Architecture เอง
+4. ห้ามเปลี่ยน Order State Machine เอง
+5. ห้ามเปลี่ยน Permission Model เอง
+6. ห้ามให้ Frontend เป็น Business Authority
+7. ห้ามสร้าง Microservices ใน Version แรก
+8. ห้ามตัด Domain สำคัญออกเพราะคิดว่าไม่จำเป็น
+9. ต้องทำระบบภาษาไทยเป็น Default
+10. ต้องใช้ Technical Identifier เป็นภาษาอังกฤษ
+11. ต้องสร้าง Validation ฝั่ง Backend
+12. ต้องสร้าง Transaction สำหรับ Critical Operations
+13. ต้องมี Audit
+14. ต้องมี Outbox
+15. ต้องมี Idempotency
+16. ต้องมี Error Catalog
+17. ต้องมี Tests
+18. ต้องรองรับ Failure / Recovery
+19. ต้องทำ Docker-first
+20. ต้องสร้าง Documentation ไปพร้อมกับ Project
+21. หากมีสิ่งที่ไม่ได้ระบุ ให้เลือกแนวทางที่สอดคล้องกับ Blueprint โดยไม่ทำลาย Architecture
+22. ห้าม hardcode Business Settings ที่ควรจัดการจาก Back Office
+23. ห้ามลบ Historical Business Data โดยตรง
+24. ห้ามใช้ Float/Double กับเงิน
+25. ห้ามใช้ db push ใน Production
+26. ห้าม expose PostgreSQL / Redis ต่อ Internet
+27. ห้าม expose Stack Trace / Secret / SQL / Internal Path แก่ Customer
+28. ต้องออกแบบให้สามารถเพิ่ม Multi-language ได้ในอนาคต
+29. ต้องออกแบบ Multi-store ready
+30. ต้องรักษา Compatibility ระหว่าง Database / API / UI / Business Rules
+
+============================================================
+40. DEFINITION OF DONE
+============================================================
+Project จะถือว่าเสร็จเมื่อ:
+
+- Customer สามารถสมัคร/เข้าสู่ระบบด้วย OTP
+- ดูสถานะร้าน
+- ดูเมนู
+- เลือก Options
+- ใช้ Cart
+- Checkout
+- เลือก Address/GPS
+- ระบบตรวจ Delivery Zone
+- เลือก Delivery/Pickup/Dine-in
+- เลือก Payment
+- สร้าง Order ได้อย่างปลอดภัย
+- Order State Machine ทำงานถูกต้อง
+- Kitchen ทำงานผ่าน Kitchen Job
+- Delivery ทำงานผ่าน Delivery Job
+- Payment แยก State ถูกต้อง
+- Transfer Slip ตรวจสอบได้
+- POS ใช้ Core Order เดียวกัน
+- Back Office จัดการระบบได้
+- Printer Retry ได้
+- Realtime Sync ได้
+- Notification Retry ได้
+- Audit ตรวจสอบย้อนหลังได้
+- Inventory มี Historical Movement
+- Promotion ตรวจ Race Condition
+- Review ตรวจ Completed + Ownership
+- Table / QR รองรับอนาคต
+- Security Test ผ่าน
+- Permission Test ผ่าน
+- E2E ผ่าน
+- Failure Recovery ผ่าน
+- Docker Build ผ่าน
+- Migration ผ่าน
+- Backup / Restore Test ผ่าน
+- Health Check ผ่าน
+- UI เป็นภาษาไทย
+- Responsive ทุกขนาดหน้าจอหลัก
+
+============================================================
+41. FINAL ARCHITECTURE STATUS
+============================================================
+PART 1 Requirement / Business Goal       LOCKED
+PART 2 Business Flow                     LOCKED
+PART 3 Database / ERD                    LOCKED
+PART 4 API / Event Contract              LOCKED
+PART 5 UI / UX                           LOCKED
+PART 6 Validation / Business Rules       LOCKED
+PART 7 Error / Edge Case / Recovery      LOCKED
+PART 8 Testing                           LOCKED
+PART 9 Deployment                        LOCKED
+PART 10 Development Specification        LOCKED
+PART 11 Final Consistency Check          PASSED
+PART 12 Language / Localization          LOCKED
+
+CONSISTENCY:
+Requirement ↔ Architecture          PASS
+Architecture ↔ Database             PASS
+Database ↔ API                      PASS
+API ↔ UI                            PASS
+Order ↔ Payment                     PASS
+Order ↔ Kitchen                     PASS
+Order ↔ Delivery                    PASS
+Order ↔ Printer                     PASS
+Order ↔ Inventory                   PASS
+Order Snapshot                      PASS
+RBAC ↔ Permission                   PASS
+Audit ↔ Critical Action             PASS
+Realtime ↔ Database                 PASS
+Transaction ↔ Outbox                PASS
+External Service Isolation          PASS
+Multi-store                         PASS
+Dine-in                             PASS
+POS                                 PASS
+Settings                            PASS
+Security                            PASS
+Error / Recovery                    PASS
+Testing                             PASS
+Deployment                          PASS
+Thai Localization                   PASS
+
+============================================================
+42. ARCHITECTURE FREEZE
+============================================================
+BLUEPRINT STATUS: 100%
+ARCHITECTURE: FROZEN
+LANGUAGE: THAI DEFAULT
+TECHNICAL IDENTIFIERS: ENGLISH
+READY FOR:
+Blueprint → Folder Structure → Prisma Schema → Migration → Code
+
+ห้ามเริ่มจาก Code ก่อนอ่าน Blueprint
+ห้ามเปลี่ยน Core Architecture โดยไม่มีเหตุผลทางเทคนิคที่ชัดเจน
+หากต้องตัดสินใจเรื่องที่ Blueprint ไม่ได้ระบุ ให้เลือกทางที่รักษา:
+- Data Integrity
+- Security
+- Auditability
+- Maintainability
+- Scalability
+- Thai-first User Experience
+- Compatibility กับ Architecture เดิม
+============================================================
+PART 13 — DEVELOPMENT GOVERNANCE — LOCKED
+============================================================
+
+13.1 Coding Governance
+----------------------
+The implementation must follow this pipeline for every protected API operation:
+
+Request
+→ Schema Validation
+→ Authentication
+→ Authorization / RBAC
+→ Object Ownership
+→ Business Validation
+→ Transaction
+→ Database Constraint
+→ Audit
+→ Outbox Event
+→ Realtime / Notification / Background Job
+
+Rules:
+- Controllers handle transport concerns only.
+- Business rules belong in Services / Domain logic.
+- Frontend is never the Business Authority.
+- Database constraints remain the final integrity boundary.
+- Critical mutations must be transactional where applicable.
+- Important mutation APIs must support idempotency.
+- Do not bypass Service / State Machine logic by directly updating critical status fields.
+- Avoid giant files and hidden side effects.
+- Every module must have clear responsibility and dependency direction.
+
+13.2 Standard Error Handling
+----------------------------
+Every API must use a consistent response structure.
+
+Success:
+{
+  "success": true,
+  "data": {}
+}
+
+Error:
+{
+  "success": false,
+  "error": {
+    "code": "PRICE_CHANGED",
+    "message": "ราคาสินค้ามีการเปลี่ยนแปลง กรุณาตรวจสอบรายการอีกครั้ง",
+    "request_id": "req_123456"
+  }
+}
+
+Rules:
+- error.code is always a stable string.
+- Frontend must branch on error.code, not on message text.
+- message is user-facing Thai text.
+- ErrorCode must come from the centralized Error Catalog.
+- Do not expose SQL, stack traces, server paths, secrets, tokens, internal configuration, or sensitive infrastructure details.
+- Production responses must use safe messages.
+- Important requests should carry a request_id for tracing.
+- HTTP status and ErrorCode are separate concepts.
+
+13.3 Schema Validation — Zod
+----------------------------
+Zod is the standard schema-validation library.
+
+Use Zod for:
+- Request body validation
+- Query parameter validation
+- Path parameter validation
+- API input validation
+- Form validation where appropriate
+- Environment variable validation
+- Important external API response validation
+
+Rules:
+- Shared schemas should be reusable between frontend and backend where appropriate.
+- Zod validates structure/type/format.
+- Zod does NOT replace business rules.
+- Business rules remain in Backend Services.
+- Database constraints remain the final integrity layer.
+- Validation errors must map to VALIDATION_ERROR or a more specific ErrorCode when defined.
+
+13.4 Environment Policy
+-----------------------
+Three environments are required conceptually:
+
+LOCAL
+STAGING
+PRODUCTION
+
+Rules:
+- No hardcoded secrets.
+- No API keys/passwords/tokens committed to Git.
+- `.env.example` contains names/placeholders only.
+- Local, Staging, and Production must use separate database/configuration resources.
+- Production must never be used accidentally by Local development.
+- Redis, Storage, external API credentials, SMS credentials, payment credentials, and database credentials must be environment-specific.
+- Production must disable debug output.
+- Production must not expose stack traces.
+- Secrets must be injected through environment variables or an appropriate secret-management mechanism.
+- Environment variables should be validated at application startup.
+- Missing required production configuration must fail startup safely rather than silently using defaults.
+
+Recommended files:
+.env.example
+.env.local
+.env.staging
+.env.production
+
+Actual production secrets must NOT be stored in the repository.
+
+13.5 Configuration Governance
+-----------------------------
+Business configuration that should change during operations must be manageable through Back Office Settings where appropriate.
+
+Do not hardcode:
+- Store hours
+- Order cutoff
+- Delivery fees
+- Delivery zone configuration
+- Menu availability
+- Promotion rules
+- Operational switches
+- Notification preferences
+- Printer routing
+- Other business-controlled values
+
+Technical configuration may remain in environment/config files.
+
+13.6 Logging vs Audit
+---------------------
+Application Log:
+- Technical/runtime diagnostics
+- Errors
+- Performance
+- Infrastructure events
+
+Audit Log:
+- Business and security actions
+- Who changed what
+- Before/after where appropriate
+- Reason
+- Timestamp
+- Related record
+- Actor / role
+
+They are separate systems.
+
+============================================================
+PART 14 — STATE TRANSITION MATRIX — LOCKED
+============================================================
+
+14.1 Core Principle
+-------------------
+Order status may ONLY change through an approved State Transition.
+
+Any transition not explicitly allowed by this matrix is DENIED.
+
+Frontend must never directly set a protected Order status.
+Controller must not directly assign Order.status.
+All transitions must pass through StateMachineService / OrderService.
+
+14.2 Allowed Order Transitions
+------------------------------
+
+| From                  | To                    | Allowed Role |
+|-----------------------|-----------------------|--------------|
+| PENDING_CONFIRMATION  | ACCEPTED              | OWNER / MANAGER / KITCHEN |
+| PENDING_CONFIRMATION  | REJECTED              | OWNER / MANAGER / KITCHEN |
+| PENDING_CONFIRMATION  | CANCELLED             | Customer / authorized staff according to policy |
+| ACCEPTED              | PREPARING             | OWNER / MANAGER / KITCHEN |
+| PREPARING             | READY                 | OWNER / MANAGER / KITCHEN |
+| READY                 | DELIVERY              | OWNER / MANAGER / DELIVERY |
+| READY                 | SERVED                | OWNER / MANAGER / KITCHEN |
+| DELIVERY              | ARRIVED               | DELIVERY |
+| ARRIVED               | DELIVERED             | DELIVERY |
+| DELIVERED             | COMPLETED             | SYSTEM / AUTHORIZED STAFF |
+| SERVED                | COMPLETED             | OWNER / MANAGER / KITCHEN |
+
+14.3 Explicitly Forbidden Transitions
+-------------------------------------
+Unless a separate correction workflow is explicitly defined:
+
+ACCEPTED → PENDING_CONFIRMATION       DENIED
+PREPARING → ACCEPTED                  DENIED
+READY → PREPARING                    DENIED
+DELIVERY → PREPARING                 DENIED
+DELIVERED → PREPARING                DENIED
+COMPLETED → PREPARING                DENIED
+COMPLETED → DELIVERED                DENIED
+COMPLETED → VOID                     DENIED
+PENDING_CONFIRMATION → COMPLETED     DENIED
+
+Every forbidden transition must return INVALID_ORDER_TRANSITION.
+
+14.4 Final State
+----------------
+COMPLETED is a final business state.
+
+Historical completed Orders must not be edited directly.
+
+Corrections must use an explicit Adjustment / Refund / Correction workflow with Audit.
+
+14.5 Cancellation
+-----------------
+Customer cancellation:
+- Allowed before PREPARING, subject to policy.
+- After PREPARING, requires staff decision/contact workflow.
+
+Staff cancellation:
+- Must be authorized.
+- Must record reason.
+- Must create timeline + audit.
+
+14.6 Rejection
+--------------
+Order rejection must use a reason code:
+
+OUT_OF_STOCK
+OUTSIDE_DELIVERY_ZONE
+STORE_ISSUE
+CUSTOMER_UNREACHABLE
+PAYMENT_ISSUE
+OTHER
+
+14.7 Payment State Is Independent
+---------------------------------
+Payment status must not be used as a substitute for Order status.
+
+Order and Payment each have their own State Machine.
+
+14.8 Kitchen State
+------------------
+Kitchen Job:
+PENDING → IN_PROGRESS → READY → COMPLETED
+
+Kitchen must not arbitrarily modify Order state.
+Kitchen actions go through KitchenService / OrderService.
+
+14.9 Delivery State
+-------------------
+UNASSIGNED → ASSIGNED → PICKED_UP → EN_ROUTE → ARRIVED → DELIVERED
+
+Abnormal:
+FAILED / CANCELLED
+
+ASSIGNED does not mean PICKED_UP.
+
+14.10 Printer State
+-------------------
+PENDING → PRINTING → PRINTED
+
+Failure:
+FAILED
+
+Printer failure does not change Order state.
+
+============================================================
+PART 15 — TESTING & DEPLOYMENT GOVERNANCE — LOCKED
+============================================================
+
+15.1 Testing Pyramid
+--------------------
+Required test layers:
+1. Unit Test
+2. Integration Test
+3. API Test
+4. E2E Test
+5. Permission / RBAC Test
+6. State Machine Test
+7. Security Test
+8. Failure / Recovery Test
+9. Migration Test
+
+15.2 Mandatory Unit-Test Services
+---------------------------------
+At minimum:
+- OrderService
+- PaymentService
+- PromotionService
+- DeliveryService
+- KitchenService
+- InventoryService
+- PrinterService
+- StateMachineService
+- PriceCalculationService
+- PermissionService
+
+15.3 Financial Calculation Coverage
+-----------------------------------
+All critical money-calculation logic must target 100% branch/logic coverage.
+
+At minimum test:
+- Subtotal
+- Item discount
+- Promotion discount
+- Delivery fee
+- Grand total
+- Tax if enabled
+- Rounding
+- Quantity
+- Options and option prices
+- Price changes
+- Promotion limits
+- Minimum spend
+- Refund limits
+
+Line coverage alone is not sufficient for critical financial logic.
+
+15.4 State Machine Tests
+------------------------
+Test every allowed transition and every important forbidden transition.
+
+Examples:
+PENDING_CONFIRMATION → ACCEPTED       PASS
+ACCEPTED → PREPARING                   PASS
+PREPARING → READY                     PASS
+READY → DELIVERY                       PASS
+DELIVERY → ARRIVED                     PASS
+ARRIVED → DELIVERED                    PASS
+DELIVERED → COMPLETED                  PASS
+
+PENDING_CONFIRMATION → COMPLETED       FAIL
+PENDING_CONFIRMATION → DELIVERY        FAIL
+ACCEPTED → PENDING_CONFIRMATION        FAIL
+DELIVERED → PREPARING                  FAIL
+COMPLETED → PREPARING                  FAIL
+COMPLETED → VOID                       FAIL
+
+15.5 Permission Tests
+---------------------
+Every protected action must be tested against every relevant role.
+
+At minimum:
+CUSTOMER
+SUPER_ADMIN
+OWNER
+MANAGER
+KITCHEN
+DELIVERY
+ACCOUNTING
+
+Test:
+- allowed action
+- denied action
+- wrong store
+- wrong object owner
+- expired/revoked session
+- missing permission
+- critical approval
+
+15.6 Integration Transaction Tests
+----------------------------------
+Core Order creation must be tested as a database transaction:
+
+BEGIN
+→ Validate
+→ Create Order
+→ Create Order Items
+→ Create Customer/Address Snapshot
+→ Create Payment Record
+→ Create Timeline
+→ Create Outbox Event
+→ COMMIT
+
+If a critical DB operation fails before commit:
+→ ROLLBACK
+
+No partial Core Order may remain.
+
+15.7 Transaction Boundary Rule
+------------------------------
+Do NOT put every external subsystem into one database transaction.
+
+The architecture deliberately separates Core Business Transaction from asynchronous subsystems.
+
+Core transaction includes business records that must be atomically created together.
+
+After COMMIT:
+Outbox / Worker handles:
+- Printer
+- Notification
+- Realtime
+- Inventory reconciliation/deduction where designed asynchronously
+- Other external or retryable side effects
+
+Therefore:
+
+Printer failure:
+→ Order remains valid
+→ Print Job = FAILED
+→ Retry / Reprint
+
+Notification failure:
+→ Order remains valid
+→ Notification retries
+
+Realtime failure:
+→ Order remains valid
+→ Client reconnects and syncs from API
+
+Inventory deduction failure:
+→ Confirmed Order remains valid
+→ Reconciliation / Retry Job
+→ Do not silently delete or corrupt Order
+
+This rule supersedes any design that would rollback a confirmed Order merely because a printer, notification, realtime transport, or asynchronous inventory worker failed.
+
+15.8 Payment Integration Tests
+------------------------------
+Test:
+- COD exact amount
+- Transfer pending
+- Slip upload
+- Slip verification
+- Slip rejection
+- Duplicate verification
+- Refund
+- Partial refund
+- Over-refund prevention
+- Payment / Order state independence
+
+15.9 Printer Integration Tests
+------------------------------
+Test:
+- Print job creation
+- Correct printer routing
+- Successful print
+- Printer unavailable
+- Timeout
+- Retry
+- Reprint
+- Duplicate print protection
+- Order remains valid when printing fails
+
+15.10 Inventory Integration Tests
+---------------------------------
+Test:
+- Recipe lookup
+- Stock availability
+- Stock movement creation
+- Successful deduction
+- Failed deduction
+- Retry
+- Reconciliation
+- No duplicate stock movement
+- Historical movement remains auditable
+
+15.11 End-to-End Main Flow
+--------------------------
+OTP
+→ Menu
+→ Options
+→ Cart
+→ Checkout
+→ Address/GPS
+→ Delivery Zone
+→ Payment
+→ Create Order
+→ Accept
+→ Kitchen
+→ Ready
+→ Delivery
+→ Arrive
+→ Delivered
+→ Completed
+→ Review
+→ Reorder
+
+15.12 Failure / Recovery E2E
+----------------------------
+Must test:
+- Double-click Create Order
+- Network disconnect during submit
+- Price changes during checkout
+- Sold-out item during checkout
+- Store closes during checkout
+- Payment slip rejected
+- Printer offline
+- Worker restart
+- Redis unavailable
+- Socket disconnect
+- Driver reassignment
+- Promotion race
+- Inventory worker failure
+
+15.13 Security Tests
+--------------------
+Must include:
+- SQL Injection
+- XSS
+- CSRF
+- IDOR
+- Broken Access Control
+- OTP Brute Force
+- OTP Replay
+- Session Hijacking
+- File Upload Attack
+- Rate Limit
+- Duplicate Submit
+- Mass Assignment
+
+15.14 Migration Tests
+---------------------
+Every Prisma migration must be tested against:
+- Clean database
+- Existing database
+- Upgrade path
+- Rollback/recovery procedure where applicable
+- Seed consistency
+- Foreign Key integrity
+- Indexes
+- Unique constraints
+
+Production migration:
+prisma migrate deploy
+
+Never use:
+prisma db push
+in Production.
+
+15.15 Deployment Environments
+-----------------------------
+LOCAL:
+- Developer machine
+- Test data
+- Local services
+- Debug allowed
+
+STAGING:
+- Production-like configuration
+- Non-production data
+- Full integration/E2E testing
+- Migration rehearsal
+- Release candidate validation
+
+PRODUCTION:
+- Real business data
+- Debug disabled
+- Secrets injected securely
+- HTTPS
+- Monitoring
+- Backup
+- Restore procedure
+- Health checks
+
+15.16 Deployment Gate
+---------------------
+A release must not be promoted to Production if:
+- Type check fails
+- Build fails
+- Critical Unit Tests fail
+- Integration Tests fail
+- State Machine Tests fail
+- Permission Tests fail
+- Security checks fail
+- Migration validation fails
+- Critical E2E fails
+
+15.17 CI/CD
+-----------
+Recommended pipeline:
+
+Install
+→ Lint
+→ Type Check
+→ Unit Test
+→ Integration Test
+→ Build
+→ Security Check
+→ Migration Validation
+→ E2E / Staging
+→ Production Approval
+→ Deploy
+→ Health Check
+→ Smoke Test
+
+15.18 Rollback Strategy
+-----------------------
+Application rollback:
+- Keep deployable previous image/version.
+- If new application version fails health/smoke tests, revert application version.
+
+Database rollback:
+- Do not assume arbitrary destructive migration rollback is safe.
+- Prefer backward-compatible migrations.
+- Backup before high-risk production migration.
+- Use forward-fix when necessary.
+- Never destroy historical business data to perform a rollback.
+
+15.19 Production Health
+-----------------------
+GET /api/health
+
+Must verify:
+- API
+- PostgreSQL
+- Redis
+- Storage
+- Worker
+
+After deployment:
+- Health check
+- API smoke test
+- Database connectivity
+- Queue/worker check
+- Critical endpoint check
+
+============================================================
+PART 16 — ENGINEERING ACCEPTANCE CRITERIA — LOCKED
+============================================================
+
+AI/Developer must not declare the project complete merely because it builds.
+
+Complete means:
+- Requirements implemented
+- Architecture respected
+- Thai-first UI implemented
+- Zod validation implemented
+- ErrorCode standard implemented
+- Environment separation implemented
+- State Machine enforced in Backend
+- RBAC enforced in Backend
+- Audit implemented
+- Outbox implemented
+- Idempotency implemented
+- Transaction boundaries correct
+- Unit tests implemented
+- Critical financial logic has required coverage
+- Integration tests implemented
+- E2E implemented
+- Security tests implemented
+- Failure/recovery tests implemented
+- Migration tested
+- Docker build succeeds
+- Staging deployment succeeds
+- Production deployment procedure documented
+- Health checks succeed
+- Backup/restore procedure documented
+
+============================================================
+PART 17 — FINAL AI GENERATION INSTRUCTION — LOCKED
+============================================================
+
+The AI generating this project must treat this Blueprint as the source of truth.
+
+Required generation order:
+1. Read the entire Blueprint.
+2. Create repository/folder structure.
+3. Create Prisma schema.
+4. Create Prisma migrations.
+5. Create seed data.
+6. Create shared types/validation.
+7. Create Backend foundation.
+8. Implement authentication.
+9. Implement Store/Business Hours.
+10. Implement Menu/Options/Pricing.
+11. Implement Customer/Address/GPS.
+12. Implement Cart.
+13. Implement Order + State Machine.
+14. Implement Payment.
+15. Implement Kitchen.
+16. Implement Delivery.
+17. Implement Outbox/Worker/Realtime.
+18. Implement Notification.
+19. Implement Printer.
+20. Implement Back Office.
+21. Implement POS.
+22. Implement Table/QR.
+23. Implement Inventory.
+24. Implement Promotion.
+25. Implement Review.
+26. Implement Reports.
+27. Implement Security hardening.
+28. Implement all required tests.
+29. Build Docker images.
+30. Validate Staging.
+31. Produce deployment documentation.
+
+Non-negotiable:
+- UI language = Thai by default.
+- Technical identifiers = English.
+- Zod = standard schema validation.
+- Backend = Business Authority.
+- PostgreSQL = Source of Truth.
+- State transitions = centralized and enforced.
+- ErrorCode = stable string.
+- Secrets = never hardcoded.
+- Local/Staging/Production = separated.
+- Critical business operations = auditable.
+- Core Order transaction = atomic.
+- External subsystem failures = retry/reconcile, not silent data corruption.
+- Production must not use `prisma db push`.
+- No destructive deletion of historical business records.
+- No arbitrary direct status mutation.
+- No architecture drift without documented technical justification.
+
+END OF DEVELOPMENT GOVERNANCE ADDENDUM
